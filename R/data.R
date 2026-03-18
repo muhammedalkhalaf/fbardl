@@ -1,0 +1,43 @@
+#' Example Data for Fourier Bootstrap ARDL Analysis
+#'
+#' @description
+#' A simulated time series dataset suitable for demonstrating the
+#' Fourier Bootstrap ARDL cointegration testing procedure. The data
+#' contains a dependent variable \code{y} and two independent variables
+#' \code{x1} and \code{x2} with a cointegrating relationship and
+#' structural breaks.
+#'
+#' @format A data frame with 150 observations and 3 variables:
+#' \describe{
+#'   \item{y}{Dependent variable (simulated I(1) series)}
+#'   \item{x1}{First independent variable (simulated I(1) series)}
+#'   \item{x2}{Second independent variable (simulated I(1) series)}
+#' }
+#'
+#' @details
+#' The data is generated from a data-generating process (DGP) that
+#' includes:
+#' \itemize{
+#'   \item A long-run cointegrating relationship: \eqn{y_t = 2 + 0.8 x_{1t} - 0.5 x_{2t} + u_t}
+#'   \item Short-run dynamics with AR(1) errors
+#'   \item A structural break modeled by Fourier terms
+#'   \item Error correction mechanism with adjustment speed of -0.3
+#' }
+#'
+#' This dataset is designed to produce clear cointegration test results
+#' when analyzed with the \code{\link{fbardl}} function.
+#'
+#' @examples
+#' data(fbardl_data)
+#' head(fbardl_data)
+#' summary(fbardl_data)
+#'
+#' # Plot the series
+#' ts.plot(ts(fbardl_data), col = 1:3, lty = 1:3)
+#' legend("topleft", colnames(fbardl_data), col = 1:3, lty = 1:3)
+#'
+#' @source Simulated data for package demonstration.
+#'
+#' @seealso \code{\link{fbardl}}
+#'
+"fbardl_data"
