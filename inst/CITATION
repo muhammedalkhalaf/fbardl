@@ -1,4 +1,4 @@
-﻿citHeader("To cite fbardl in publications use:")
+citHeader("To cite fbardl in publications use:")
 
 bibentry(
   bibtype  = "Manual",
