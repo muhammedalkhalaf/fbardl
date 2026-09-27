@@ -5,7 +5,7 @@
 \alias{fbardl-package}
 \title{fbardl: Fourier Bootstrap ARDL Cointegration Test}
 \description{
-Implements the Fourier Bootstrap Autoregressive Distributed Lag (FBARDL) bounds testing approach for cointegration analysis. Combines the Pesaran, Shin & Smith (2001) \doi{10.1002/jae.616} ARDL bounds testing framework with Fourier terms to capture structural breaks following Yilanci, Bozoklu & Gorus (2020) \doi{10.1080/00036846.2019.1686454}, and bootstrap critical values based on McNown, Sam & Goh (2018) \doi{10.1080/00036846.2017.1366643} and Bertelli, Vacca & Zoia (2022) \doi{10.1016/j.econmod.2022.105987}. Features include automatic lag selection via AIC/BIC, optimal Fourier frequency selection by minimum SSR, long-run and short-run coefficient estimation, diagnostic tests, and dynamic multiplier analysis.
+Implements the Fourier Bootstrap Autoregressive Distributed Lag (FBARDL) bounds testing approach for cointegration analysis. Combines the Pesaran, Shin & Smith (2001) \doi{10.1002/jae.616} ARDL bounds testing framework with Fourier terms to capture structural breaks following Yilanci, Bozoklu & Gorus (2020) \doi{10.1016/j.scs.2020.102035}, and bootstrap critical values based on McNown, Sam & Goh (2018) \doi{10.1080/00036846.2017.1366643} and Bertelli, Vacca & Zoia (2022) \doi{10.1016/j.econmod.2022.105987}. Features include automatic lag selection via AIC/BIC, optimal Fourier frequency selection by minimum SSR, long-run and short-run coefficient estimation, diagnostic tests, and dynamic multiplier analysis.
 
 The fbardl package implements the Fourier Bootstrap ARDL bounds testing
 approach for cointegration analysis. It combines the Pesaran, Shin & Smith
