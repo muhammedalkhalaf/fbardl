@@ -78,7 +78,7 @@ The function returns an object of class `"fbardl"` containing:
 
 ## Author
 
-Dr. Merwan Roudane (merwanroudane920@gmail.com)
+Muhammad Alkhalaf (muhammedalkhalaf@gmail.com)
 
 ## License
 

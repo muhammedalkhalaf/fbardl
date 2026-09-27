@@ -62,10 +62,6 @@ Useful links:
 \author{
 \strong{Maintainer}: Muhammad Alkhalaf \email{muhammedalkhalaf@gmail.com} (\href{https://orcid.org/0009-0002-2677-9246}{ORCID}) [copyright holder]
 
-Other contributors:
-\itemize{
-  \item Merwan Roudane (Original Stata implementation) [contributor]
-}
 
 }
 \keyword{internal}
