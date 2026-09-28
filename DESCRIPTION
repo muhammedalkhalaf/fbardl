@@ -1,7 +1,7 @@
 Package: fbardl
 Type: Package
 Title: Fourier Bootstrap ARDL Cointegration Test
-Version: 1.0.3
+Version: 1.1.0
 Authors@R: c(
     person("Muhammad", "Alkhalaf", 
            email = "muhammedalkhalaf@gmail.com",
@@ -14,7 +14,8 @@ Description: Implements the Fourier Bootstrap Autoregressive Distributed Lag
     Yilanci, Bozoklu & Gorus (2020) <doi:10.1016/j.scs.2020.102035>, 
     and bootstrap critical values based on McNown, Sam & Goh (2018) 
     <doi:10.1080/00036846.2017.1366643> and Bertelli, Vacca & Zoia (2022) 
-    <doi:10.1016/j.econmod.2022.105987>. Features include automatic lag 
+    <doi:10.1016/j.econmod.2022.105987>, with finite-sample bounds test critical
+    values from Kripfganz and Schneider (2020) <doi:10.1111/obes.12377>. Features include automatic lag 
     selection via AIC/BIC, optimal Fourier frequency selection by minimum 
     SSR, long-run and short-run coefficient estimation, diagnostic tests, 
     and dynamic multiplier analysis.
@@ -28,6 +29,7 @@ Suggests:
     knitr,
     rmarkdown
 LazyData: true
+Config/testthat/edition: 3
 RoxygenNote: 7.3.3
 URL: https://github.com/muhammedalkhalaf/fbardl
 BugReports: https://github.com/muhammedalkhalaf/fbardl/issues

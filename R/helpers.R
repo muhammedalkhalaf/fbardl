@@ -1,152 +1,54 @@
-#' Build ARDL regression data (fixed q for all variables)
+#' Build the ARDL equilibrium-correction design
+#'
+#' Rows are t = max(p, q) + 2, ..., n. Regressors: L.y, L.x, L1..Lp D.y,
+#' D.x lags j0..q (per regressor), Fourier terms, trend (PSS cases 4 and 5),
+#' constant.
 #' @noRd
-.build_ardl_data <- function(y, X, p, q, fourier_sin = NULL, fourier_cos = NULL) {
+.build_ardl_data_flex <- function(y, X, p, q_vec, fourier_sin = NULL,
+                                  fourier_cos = NULL, trend = FALSE, j0 = 0L) {
   n <- length(y)
   nindep <- ncol(X)
-
-  max_lag <- max(p, q)
-
-  # Start index (need max_lag + 1 observations for differencing and lags)
-  start_idx <- max_lag + 2
-
-  if (start_idx > n) return(NULL)
-
-  # Number of usable observations
-  nobs <- n - start_idx + 1
-
-  # Dependent variable: first difference of y
-  dy <- diff(y)
-  Y <- dy[start_idx:n - 1]
-
-  # Build regressor matrix
-  regressors <- list()
-  coef_names <- c()
-
-  # 1. Lagged levels (ECM terms)
-  # L.y
-  regressors$Ly <- y[(start_idx - 1):(n - 1)]
-  coef_names <- c(coef_names, "L.y")
-
-  # L.x for each independent variable
-  for (j in 1:nindep) {
-    regressors[[paste0("L.x", j)]] <- X[(start_idx - 1):(n - 1), j]
-    coef_names <- c(coef_names, paste0("L.", colnames(X)[j]))
-  }
-
-  # 2. Lagged differences of y
-  for (lag in 1:p) {
-    regressors[[paste0("LD", lag, ".y")]] <- dy[(start_idx - lag - 1):(n - lag - 1)]
-    coef_names <- c(coef_names, paste0("L", lag, ".D.y"))
-  }
-
-  # 3. Contemporaneous and lagged differences of X
-  dX <- diff(X)
-  for (j in 1:nindep) {
-    for (lag in 0:q) {
-      if (lag == 0) {
-        regressors[[paste0("D.x", j)]] <- dX[(start_idx - 1):(n - 1), j]
-        coef_names <- c(coef_names, paste0("D.", colnames(X)[j]))
-      } else {
-        regressors[[paste0("LD", lag, ".x", j)]] <- dX[(start_idx - lag - 1):(n - lag - 1), j]
-        coef_names <- c(coef_names, paste0("L", lag, ".D.", colnames(X)[j]))
-      }
-    }
-  }
-
-  # 4. Fourier terms (if provided)
-  if (!is.null(fourier_sin)) {
-    regressors$sin <- fourier_sin[start_idx:n]
-    coef_names <- c(coef_names, "sin")
-  }
-  if (!is.null(fourier_cos)) {
-    regressors$cos <- fourier_cos[start_idx:n]
-    coef_names <- c(coef_names, "cos")
-  }
-
-  # 5. Constant
-  regressors$cons <- rep(1, length(Y))
-  coef_names <- c(coef_names, "constant")
-
-  # Combine into matrix
-  Xmat <- do.call(cbind, regressors)
-
-  return(list(Y = Y, Xmat = Xmat, coef_names = coef_names))
-}
-
-
-#' Build ARDL regression data (flexible q for each variable)
-#' @noRd
-.build_ardl_data_flex <- function(y, X, p, q_vec, fourier_sin = NULL, fourier_cos = NULL) {
-  n <- length(y)
-  nindep <- ncol(X)
-
-  if (length(q_vec) != nindep) {
+  if (length(q_vec) != nindep)
     stop("q_vec must have length equal to number of independent variables")
-  }
-
-  max_lag <- max(p, max(q_vec))
-
-  # Start index
-  start_idx <- max_lag + 2
-
+  start_idx <- max(p, max(q_vec)) + 2L
   if (start_idx > n) return(NULL)
+  rows <- start_idx:n
+  dy <- c(NA_real_, diff(y))
+  dX <- rbind(NA_real_, diff(X))
+  lagv <- function(v, j) v[rows - j]
 
-  # Dependent variable: first difference of y
-  dy <- diff(y)
-  Y <- dy[(start_idx - 1):(n - 1)]
-
-  # Build regressor matrix
-  regressors <- list()
-  coef_names <- c()
-
-  # 1. Lagged levels (ECM terms)
-  regressors$Ly <- y[(start_idx - 1):(n - 1)]
-  coef_names <- c(coef_names, "L.y")
-
-  for (j in 1:nindep) {
-    regressors[[paste0("L.x", j)]] <- X[(start_idx - 1):(n - 1), j]
+  regressors <- list(y[rows - 1L])
+  coef_names <- "L.y"
+  for (j in seq_len(nindep)) {
+    regressors[[length(regressors) + 1L]] <- X[rows - 1L, j]
     coef_names <- c(coef_names, paste0("L.", colnames(X)[j]))
   }
-
-  # 2. Lagged differences of y
-  for (lag in 1:p) {
-    regressors[[paste0("LD", lag, ".y")]] <- dy[(start_idx - lag - 1):(n - lag - 1)]
+  for (lag in seq_len(p)) {
+    regressors[[length(regressors) + 1L]] <- lagv(dy, lag)
     coef_names <- c(coef_names, paste0("L", lag, ".D.y"))
   }
-
-  # 3. Contemporaneous and lagged differences of X (variable-specific q)
-  dX <- diff(X)
-  for (j in 1:nindep) {
-    qj <- q_vec[j]
-    for (lag in 0:qj) {
-      if (lag == 0) {
-        regressors[[paste0("D.x", j)]] <- dX[(start_idx - 1):(n - 1), j]
-        coef_names <- c(coef_names, paste0("D.", colnames(X)[j]))
-      } else {
-        regressors[[paste0("LD", lag, ".x", j)]] <- dX[(start_idx - lag - 1):(n - lag - 1), j]
-        coef_names <- c(coef_names, paste0("L", lag, ".D.", colnames(X)[j]))
-      }
+  for (j in seq_len(nindep)) {
+    if (q_vec[j] >= j0) for (lag in j0:q_vec[j]) {
+      regressors[[length(regressors) + 1L]] <- lagv(dX[, j], lag)
+      coef_names <- c(coef_names, if (lag == 0) paste0("D.", colnames(X)[j])
+                      else paste0("L", lag, ".D.", colnames(X)[j]))
     }
   }
-
-  # 4. Fourier terms
   if (!is.null(fourier_sin)) {
-    regressors$sin <- fourier_sin[start_idx:n]
-    coef_names <- c(coef_names, "sin")
+    regressors[[length(regressors) + 1L]] <- fourier_sin[rows]
+    regressors[[length(regressors) + 1L]] <- fourier_cos[rows]
+    coef_names <- c(coef_names, "sin", "cos")
   }
-  if (!is.null(fourier_cos)) {
-    regressors$cos <- fourier_cos[start_idx:n]
-    coef_names <- c(coef_names, "cos")
+  if (trend) {
+    regressors[[length(regressors) + 1L]] <- as.numeric(rows)
+    coef_names <- c(coef_names, "trend")
   }
-
-  # 5. Constant
-  regressors$cons <- rep(1, length(Y))
+  regressors[[length(regressors) + 1L]] <- rep(1, length(rows))
   coef_names <- c(coef_names, "constant")
 
   Xmat <- do.call(cbind, regressors)
   colnames(Xmat) <- coef_names
-
-  return(list(Y = Y, Xmat = Xmat, coef_names = coef_names))
+  list(Y = dy[rows], Xmat = Xmat, coef_names = coef_names, rows = rows)
 }
 
 
@@ -162,205 +64,223 @@
 }
 
 
-#' PSS Bounds Test critical values
+#' PSS bounds test with Kripfganz and Schneider (2020) critical values
+#'
+#' Finite-sample critical values and approximate p-values from the response
+#' surface regressions of Kripfganz and Schneider (2020). The F_ind test has
+#' no tabulated distribution; it is reported only with the bootstrap types.
 #' @noRd
-.pss_bounds_test <- function(Fov_stat, t_stat, Find_stat, k, case, nobs) {
-  # PSS (2001) asymptotic critical values (Case 3: unrestricted intercept, no trend)
-  # These are approximate; Kripfganz & Schneider (2020) provide better finite-sample CVs
-
-  # F-test critical values by k (number of independent variables)
-  F_cvs <- list(
-    "1" = list(I0 = c(4.04, 4.94, 6.84), I1 = c(4.78, 5.73, 7.84)),
-    "2" = list(I0 = c(3.17, 3.79, 5.15), I1 = c(4.14, 4.85, 6.36)),
-    "3" = list(I0 = c(2.72, 3.23, 4.29), I1 = c(3.77, 4.35, 5.61)),
-    "4" = list(I0 = c(2.45, 2.86, 3.74), I1 = c(3.52, 4.01, 5.06)),
-    "5" = list(I0 = c(2.26, 2.62, 3.41), I1 = c(3.35, 3.79, 4.68))
-  )
-
-  # t-test critical values
-  t_cvs <- list(
-    "1" = list(I0 = c(-2.57, -2.86, -3.43), I1 = c(-2.91, -3.22, -3.82)),
-    "2" = list(I0 = c(-2.57, -2.86, -3.43), I1 = c(-3.21, -3.53, -4.10)),
-    "3" = list(I0 = c(-2.57, -2.86, -3.43), I1 = c(-3.46, -3.78, -4.37)),
-    "4" = list(I0 = c(-2.57, -2.86, -3.43), I1 = c(-3.66, -3.99, -4.60)),
-    "5" = list(I0 = c(-2.57, -2.86, -3.43), I1 = c(-3.82, -4.16, -4.79))
-  )
-
-  k_str <- as.character(min(k, 5))
-
-  F_I0 <- F_cvs[[k_str]]$I0  # 10%, 5%, 1%
-  F_I1 <- F_cvs[[k_str]]$I1
-  t_I0 <- t_cvs[[k_str]]$I0
-  t_I1 <- t_cvs[[k_str]]$I1
-
-  # F-test p-value (approximate using bounds)
-  if (Fov_stat > F_I1[3]) {
-    Fov_pval <- 0.005  # < 1%
-  } else if (Fov_stat > F_I1[2]) {
-    Fov_pval <- 0.025  # 1-5%
-  } else if (Fov_stat > F_I1[1]) {
-    Fov_pval <- 0.075  # 5-10%
-  } else if (Fov_stat > F_I0[1]) {
-    Fov_pval <- 0.15  # Inconclusive
-  } else {
-    Fov_pval <- 0.5  # > 10%
+.pss_bounds_test <- function(Fov_stat, t_stat, k, case, nobs, sr) {
+  Fb <- .ks_bounds("F", case, k, nobs, sr, value = Fov_stat)
+  tb <- .ks_bounds("t", case, k, nobs, sr, value = t_stat)
+  dec <- function(stat, lo, hi, upper) {
+    if (anyNA(c(lo, hi))) return(NA_character_)
+    if (upper) {
+      if (stat > hi) "reject" else if (stat < lo) "do not reject" else "inconclusive"
+    } else {
+      if (stat < hi) "reject" else if (stat > lo) "do not reject" else "inconclusive"
+    }
   }
-
-  # t-test p-value
-  if (t_stat < t_I1[3]) {
-    t_pval <- 0.005
-  } else if (t_stat < t_I1[2]) {
-    t_pval <- 0.025
-  } else if (t_stat < t_I1[1]) {
-    t_pval <- 0.075
-  } else if (t_stat < t_I0[1]) {
-    t_pval <- 0.15
+  F_dec <- dec(Fov_stat, Fb$cv["I0", "5%"], Fb$cv["I1", "5%"], TRUE)
+  t_dec <- dec(t_stat, tb$cv["I0", "5%"], tb$cv["I1", "5%"], FALSE)
+  decision <- if (anyNA(c(F_dec, t_dec))) {
+    "Critical values unavailable (fewer than twice as many observations as coefficients)"
+  } else if (F_dec == "reject" && t_dec == "reject") {
+    "COINTEGRATION: F and t beyond the I(1) bounds at 5%"
+  } else if (F_dec == "do not reject" || t_dec == "do not reject") {
+    "NO COINTEGRATION: F or t within the I(0) bound at 5%"
   } else {
-    t_pval <- 0.5
+    "INCONCLUSIVE at 5% (statistic between the bounds)"
   }
-
-  # Find p-value (use F distribution approximation)
-  Find_pval <- pf(Find_stat, k, nobs - k - 1, lower.tail = FALSE)
-
-  # Decision
-  Fov_reject <- Fov_stat > F_I1[2]  # Compare to 5% I(1) bound
-  t_reject <- t_stat < t_I1[2]
-  Find_reject <- Find_pval < 0.05
-
-  if (Fov_reject && t_reject && Find_reject) {
-    decision <- "COINTEGRATION detected (all tests significant at 5%)"
-  } else if (!Fov_reject && !t_reject && !Find_reject) {
-    decision <- "NO COINTEGRATION detected at 5% level"
-  } else if (Fov_reject && Find_reject && !t_reject) {
-    decision <- "DEGENERATE CASE #1: Fov & Find significant but t not (y may be I(0))"
-  } else if (Fov_reject && t_reject && !Find_reject) {
-    decision <- "DEGENERATE CASE #2: Fov & t significant but Find not (x not in ECM)"
-  } else if (Fov_stat > F_I0[2] && Fov_stat < F_I1[2]) {
-    decision <- "INCONCLUSIVE (F-statistic between bounds)"
-  } else {
-    decision <- "PARTIAL EVIDENCE: check individual test results"
-  }
-
-  return(list(
-    Fov.pval = Fov_pval,
-    t.pval = t_pval,
-    Find.pval = Find_pval,
-    F.cv05.I0 = F_I0[2],
-    F.cv05.I1 = F_I1[2],
-    t.cv05.I0 = t_I0[2],
-    t.cv05.I1 = t_I1[2],
-    Find.cv05 = qf(0.95, k, nobs - k - 1),
-    decision = decision
-  ))
+  list(
+    source = "Kripfganz and Schneider (2020)",
+    sr = sr,
+    F.cv = Fb$cv, t.cv = tb$cv,
+    Fov.pval = Fb$pvalue, t.pval = tb$pvalue, Find.pval = NA_real_,
+    F.cv05.I0 = unname(Fb$cv["I0", "5%"]), F.cv05.I1 = unname(Fb$cv["I1", "5%"]),
+    t.cv05.I0 = unname(tb$cv["I0", "5%"]), t.cv05.I1 = unname(tb$cv["I1", "5%"]),
+    Find.cv05 = NA_real_,
+    decision = decision)
 }
 
 
-#' Bootstrap ARDL test
+#' Bootstrap ARDL test (McNown, Sam and Goh 2018; Bertelli, Vacca and Zoia 2022)
+#'
+#' Port of _fbardl_bootstrap.ado (Stata fbardl 1.3.0). Bootstrap data are
+#' generated recursively from the restricted y equation (one null for the
+#' McNown et al. version, one per statistic for Bertelli et al.) and the
+#' equations for Delta x, resampling the residual pairs; the full model is
+#' re-estimated on each bootstrap sample.
 #' @noRd
-.bootstrap_ardl_test <- function(y, X, best_p, best_q, best_kstar, T,
-                                  Fov_stat, t_stat, Find_stat,
-                                  type, reps, final_data, coef_names,
-                                  level_idx, indep_level_idx, ecm_idx) {
+.bootstrap_ardl_test <- function(y, X, best_p, best_q, fsin, fcos, trend, j0,
+                                 case, type, reps, Fov_stat, t_stat, Find_stat,
+                                 fov_names, dgpcheck = FALSE) {
+  T <- length(y); K <- ncol(X); p <- best_p
+  xn <- colnames(X)
+  des <- function(yy, XX) .build_ardl_data_flex(yy, XX, p, best_q, fsin, fcos, trend, j0)
+  full <- des(y, X)
+  cn <- full$coef_names
+  ind_names <- paste0("L.", xn)
 
-  n <- length(y)
-  nindep <- ncol(X)
+  nnull <- if (type == "fbardl_mcnown") 1L else 3L
+  nulluse <- if (type == "fbardl_mcnown") c(1L, 1L, 1L) else 1:3
+  drops <- list(fov_names, "L.y", ind_names)
 
-  # Generate Fourier terms
-  ttrend <- 1:T
-  if (best_kstar > 0) {
-    fourier_sin <- sin(2 * pi * best_kstar * ttrend / T)
-    fourier_cos <- cos(2 * pi * best_kstar * ttrend / T)
-  } else {
-    fourier_sin <- NULL
-    fourier_cos <- NULL
+  ## restricted y equations
+  eqY <- lapply(seq_len(nnull), function(h) {
+    keep <- setdiff(cn, drops[[h]])
+    Z <- full$Xmat[, keep, drop = FALSE]
+    b <- stats::lm.fit(Z, full$Y)$coefficients
+    b[is.na(b)] <- 0
+    coef <- stats::setNames(rep(0, length(cn)), cn)
+    coef[keep] <- b
+    xb <- rep(NA_real_, T); r <- rep(NA_real_, T)
+    xb[full$rows] <- as.numeric(Z %*% b)
+    r[full$rows] <- full$Y - xb[full$rows]
+    list(coef = coef, xb = xb, r = r)
+  })
+
+  ## equations for Delta x
+  dy0 <- c(0, diff(y)); dX0 <- rbind(0, diff(X))
+  rowsx <- (p + 2L):T
+  Zx <- cbind(if (type == "fbardl_mcnown") y[rowsx - 1L],
+              X[rowsx - 1L, , drop = FALSE],
+              do.call(cbind, lapply(seq_len(p), function(j)
+                cbind(dy0[rowsx - j], dX0[rowsx - j, , drop = FALSE]))),
+              if (!is.null(fsin)) cbind(fsin[rowsx], fcos[rowsx]),
+              if (trend) as.numeric(rowsx), 1)
+  eqX <- lapply(seq_len(K), function(m) {
+    b <- stats::lm.fit(Zx, dX0[rowsx, m])$coefficients
+    b[is.na(b)] <- 0
+    xb <- rep(NA_real_, T); r <- rep(NA_real_, T)
+    xb[rowsx] <- as.numeric(Zx %*% b)
+    r[rowsx] <- dX0[rowsx, m] - xb[rowsx]
+    off <- if (type == "fbardl_mcnown") 1L else 0L
+    list(by = if (off) b[1] else 0, bx = b[off + seq_len(K)],
+         phi = b[off + K + (seq_len(p) - 1L) * (K + 1L) + 1L],
+         th = matrix(b[off + K + outer(seq_len(K) + 1L, (seq_len(p) - 1L) * (K + 1L), `+`)],
+                     K, p),
+         xb = xb, r = r)
+  })
+
+  ## history parts evaluated on any series
+  fity <- function(Ys, Xs, dYs, dXs, t, co) {
+    v <- co[["L.y"]] * Ys[t - 1L] + sum(co[paste0("L.", xn)] * Xs[t - 1L, ])
+    for (j in seq_len(p)) v <- v + co[[paste0("L", j, ".D.y")]] * dYs[t - j]
+    for (m in seq_len(K)) if (best_q[m] >= j0) for (j in j0:best_q[m]) {
+      nm <- if (j == 0) paste0("D.", xn[m]) else paste0("L", j, ".D.", xn[m])
+      v <- v + co[[nm]] * dXs[t - j, m]
+    }
+    v
+  }
+  fitx <- function(Ys, Xs, dYs, dXs, t, e) {
+    v <- e$by * Ys[t - 1L] + sum(e$bx * Xs[t - 1L, ])
+    for (j in seq_len(p)) v <- v + e$phi[j] * dYs[t - j] + sum(e$th[, j] * dXs[t - j, ])
+    v
   }
 
-  # Original model residuals
-  fit_original <- lm(final_data$Y ~ final_data$Xmat - 1)
-  resid_orig <- fit_original$residuals
-  coefs_orig <- coef(fit_original)
+  ok <- Reduce(`&`, c(lapply(eqY, function(e) !is.na(e$r)),
+                      lapply(eqX, function(e) !is.na(e$r))))
+  pool <- which(ok)
+  t0 <- min(pool); tN <- max(pool)
+  detY <- sapply(eqY, function(e) {
+    d <- e$xb
+    for (t in pool) d[t] <- d[t] - fity(y, X, dy0, dX0, t, e$coef)
+    d
+  })
+  detY <- matrix(detY, T)
+  detX <- sapply(eqX, function(e) {
+    d <- e$xb
+    for (t in pool) d[t] <- d[t] - fitx(y, X, dy0, dX0, t, e)
+    d
+  })
+  detX <- matrix(detX, T)
+  poolY <- sapply(eqY, `[[`, "r"); poolY <- matrix(poolY, T)
+  poolX <- sapply(eqX, `[[`, "r"); poolX <- matrix(poolX, T)
+  npool <- length(pool)
 
-  # Store bootstrap test statistics
-  Fov_boot <- numeric(reps)
-  t_boot <- numeric(reps)
-  Find_boot <- numeric(reps)
-
-  # Bootstrap loop
-  for (b in 1:reps) {
-    # Resample residuals
-    resid_boot <- sample(resid_orig, replace = TRUE)
-
-    # Construct bootstrap dependent variable
-    if (type == "fbardl_mcnown") {
-      # Unconditional bootstrap: Y* = X*beta + e*
-      Y_boot <- final_data$Xmat %*% coefs_orig + resid_boot
-    } else {
-      # Conditional bootstrap (Bertelli et al.): constrained null
-      # Set ECM coefficient to 0 (no cointegration)
-      coefs_null <- coefs_orig
-      coefs_null[ecm_idx] <- 0
-      Y_boot <- final_data$Xmat %*% coefs_null + resid_boot
+  recurse <- function(eY, eX, h) {
+    Ys <- y; Xs <- X; dYs <- dy0; dXs <- dX0
+    for (t in t0:tN) {
+      for (i in seq_len(K)) {
+        dxi <- detX[t, i] + eX[t, i] + fitx(Ys, Xs, dYs, dXs, t, eqX[[i]])
+        dXs[t, i] <- dxi
+        Xs[t, i] <- Xs[t - 1L, i] + dxi
+      }
+      dyt <- detY[t, h] + eY[t] + fity(Ys, Xs, dYs, dXs, t, eqY[[h]]$coef)
+      dYs[t] <- dyt
+      Ys[t] <- Ys[t - 1L] + dyt
     }
-
-    # Re-estimate model
-    fit_boot <- tryCatch({
-      lm(Y_boot ~ final_data$Xmat - 1)
-    }, error = function(e) NULL)
-
-    if (is.null(fit_boot)) {
-      Fov_boot[b] <- NA
-      t_boot[b] <- NA
-      Find_boot[b] <- NA
-      next
-    }
-
-    coefs_b <- coef(fit_boot)
-    vcov_b <- tryCatch(vcov(fit_boot), error = function(e) NULL)
-
-    if (is.null(vcov_b) || any(is.na(diag(vcov_b)))) {
-      Fov_boot[b] <- NA
-      t_boot[b] <- NA
-      Find_boot[b] <- NA
-      next
-    }
-
-    se_b <- sqrt(diag(vcov_b))
-    nparams <- length(coefs_b)
-    df_resid <- length(Y_boot) - nparams
-
-    # F-overall
-    R_overall <- diag(nparams)[level_idx, , drop = FALSE]
-    r_overall <- rep(0, length(level_idx))
-    Fov_boot[b] <- tryCatch({
-      .wald_f_test(coefs_b, vcov_b, R_overall, r_overall, df_resid)
-    }, error = function(e) NA)
-
-    # t-statistic
-    t_boot[b] <- coefs_b[ecm_idx] / se_b[ecm_idx]
-
-    # F-independent
-    R_ind <- diag(nparams)[indep_level_idx, , drop = FALSE]
-    r_ind <- rep(0, length(indep_level_idx))
-    Find_boot[b] <- tryCatch({
-      .wald_f_test(coefs_b, vcov_b, R_ind, r_ind, df_resid)
-    }, error = function(e) NA)
+    list(y = Ys, X = Xs)
   }
 
-  # Remove NAs
-  Fov_boot <- Fov_boot[!is.na(Fov_boot)]
-  t_boot <- t_boot[!is.na(t_boot)]
-  Find_boot <- Find_boot[!is.na(Find_boot)]
+  if (dgpcheck) {
+    dev <- vapply(seq_len(nnull), function(h) {
+      eY <- rep(0, T); eX <- matrix(0, T, K)
+      eY[t0:tN] <- poolY[t0:tN, h]; eX[t0:tN, ] <- poolX[t0:tN, ]
+      r <- recurse(eY, eX, h)
+      max(abs(r$y - y), abs(r$X - X))
+    }, numeric(1))
+    return(dev)
+  }
 
-  # Compute critical values and p-values
-  Fov_cv <- quantile(Fov_boot, c(0.90, 0.95, 0.975, 0.99), na.rm = TRUE)
-  t_cv <- quantile(t_boot, c(0.01, 0.025, 0.05, 0.10), na.rm = TRUE)
-  Find_cv <- quantile(Find_boot, c(0.90, 0.95, 0.975, 0.99), na.rm = TRUE)
+  # McNown et al.: residuals recentred once (Stata fbardl recmode 1)
+  if (type == "fbardl_mcnown") {
+    div <- npool - p - 1
+    if (div < 1) div <- npool
+    for (h in seq_len(nnull)) poolY[pool, h] <- poolY[pool, h] - sum(poolY[pool, h]) / div
+    for (m in seq_len(K)) poolX[pool, m] <- poolX[pool, m] - sum(poolX[pool, m]) / div
+  }
 
-  Fov_pval <- mean(Fov_boot >= Fov_stat, na.rm = TRUE)
-  t_pval <- mean(t_boot <= t_stat, na.rm = TRUE)
-  Find_pval <- mean(Find_boot >= Find_stat, na.rm = TRUE)
+  stat_fun <- function(yy, XX) {
+    d <- des(yy, XX)
+    fit <- stats::lm.fit(d$Xmat, d$Y)
+    if (fit$rank < ncol(d$Xmat)) return(c(NA, NA, NA))
+    e <- fit$residuals
+    s2 <- sum(e^2) / (length(e) - ncol(d$Xmat))
+    V <- s2 * chol2inv(qr.R(fit$qr))
+    b <- fit$coefficients
+    Ftest <- function(nms) {
+      i <- match(nms, d$coef_names)
+      as.numeric(t(b[i]) %*% solve(V[i, i, drop = FALSE]) %*% b[i]) / length(i)
+    }
+    iy <- match("L.y", d$coef_names)
+    c(Ftest(fov_names), b[iy] / sqrt(V[iy, iy]), Ftest(ind_names))
+  }
 
-  # Decision
+  stats_mat <- matrix(NA_real_, reps, 3)
+  for (bb in seq_len(reps)) {
+    last <- 0L; cur <- NULL
+    for (s in 1:3) {
+      h <- nulluse[s]
+      if (h != last) {
+        idx <- pool[ceiling(stats::runif(npool) * npool)]
+        eY <- rep(0, T); eX <- matrix(0, T, K)
+        eY[t0:tN] <- poolY[idx, h]; eX[t0:tN, ] <- poolX[idx, , drop = FALSE]
+        if (type != "fbardl_mcnown") {
+          eY[t0:tN] <- eY[t0:tN] - mean(eY[t0:tN])
+          eX[t0:tN, ] <- sweep(eX[t0:tN, , drop = FALSE], 2,
+                               colMeans(eX[t0:tN, , drop = FALSE]))
+        }
+        r <- recurse(eY, eX, h)
+        cur <- tryCatch(stat_fun(r$y, r$X), error = function(e) c(NA, NA, NA))
+        last <- h
+      }
+      stats_mat[bb, s] <- cur[s]
+    }
+  }
+
+  qhi <- function(v, pr) { v <- sort(v[!is.na(v)]); if (length(v) < 3) NA else v[min(ceiling(pr * length(v)), length(v))] }
+  qlo <- function(v, pr) { v <- sort(v[!is.na(v)]); if (length(v) < 3) NA else v[max(floor(pr * length(v)), 1)] }
+  Fb <- stats_mat[, 1]; tb <- stats_mat[, 2]; Ib <- stats_mat[, 3]
+  lv <- c(0.10, 0.05, 0.025, 0.01)
+  F_cv <- sapply(1 - lv, qhi, v = Fb); t_cv <- sapply(lv, qlo, v = tb)
+  I_cv <- sapply(1 - lv, qhi, v = Ib)
+  names(F_cv) <- names(t_cv) <- names(I_cv) <- c("10%", "5%", "2.5%", "1%")
+  Fov_pval <- mean(Fb[!is.na(Fb)] >= Fov_stat)
+  t_pval <- mean(tb[!is.na(tb)] <= t_stat)
+  Find_pval <- mean(Ib[!is.na(Ib)] >= Find_stat)
+
   if (Fov_pval < 0.05 && t_pval < 0.05 && Find_pval < 0.05) {
     decision <- "COINTEGRATION detected (all tests significant at 5%)"
   } else if (Fov_pval >= 0.05 && t_pval >= 0.05 && Find_pval >= 0.05) {
@@ -368,28 +288,21 @@
   } else if (Fov_pval < 0.05 && Find_pval < 0.05 && t_pval >= 0.05) {
     decision <- "DEGENERATE CASE #1: Fov & Find significant but t not (y may be I(0))"
   } else if (Fov_pval < 0.05 && t_pval < 0.05 && Find_pval >= 0.05) {
-    decision <- "DEGENERATE CASE #2: Fov & t significant but Find not (x not in ECM)"
+    decision <- "DEGENERATE CASE #2: Fov & t significant but Find not"
   } else {
     decision <- "PARTIAL EVIDENCE: check individual test results"
   }
 
-  return(list(
-    Fov.pval = Fov_pval,
-    t.pval = t_pval,
-    Find.pval = Find_pval,
-    F.cv05.I0 = Fov_cv["90%"],
-    F.cv05.I1 = Fov_cv["95%"],
-    F.cv01 = Fov_cv["99%"],
-    t.cv05.I0 = t_cv["10%"],
-    t.cv05.I1 = t_cv["5%"],
-    t.cv01 = t_cv["1%"],
-    Find.cv05 = Find_cv["95%"],
-    Find.cv01 = Find_cv["99%"],
+  list(
+    source = "bootstrap",
+    Fov.pval = Fov_pval, t.pval = t_pval, Find.pval = Find_pval,
+    F.cv = F_cv, t.cv = t_cv, Find.cv = I_cv,
+    F.cv05.I0 = NA_real_, F.cv05.I1 = unname(F_cv["5%"]),
+    t.cv05.I0 = NA_real_, t.cv05.I1 = unname(t_cv["5%"]),
+    Find.cv05 = unname(I_cv["5%"]),
+    nvalid = colSums(!is.na(stats_mat)),
     decision = decision,
-    Fov.boot = Fov_boot,
-    t.boot = t_boot,
-    Find.boot = Find_boot
-  ))
+    Fov.boot = Fb, t.boot = tb, Find.boot = Ib)
 }
 
 
@@ -474,7 +387,7 @@
 
 #' Diagnostic tests
 #' @noRd
-.run_diagnostics <- function(residuals, nobs, nparams) {
+.run_diagnostics <- function(residuals, nobs, nparams, Xmat, fitted) {
   n <- length(residuals)
 
   # Jarque-Bera normality test
@@ -486,51 +399,38 @@
   jb_stat <- n * (skew^2 / 6 + kurt^2 / 24)
   jb_pval <- pchisq(jb_stat, 2, lower.tail = FALSE)
 
-  # Breusch-Godfrey serial correlation test (AR1)
-  bg1 <- tryCatch({
-    resid_lag1 <- c(NA, residuals[-n])
-    fit_bg1 <- lm(residuals ~ resid_lag1)
-    r2_bg1 <- summary(fit_bg1)$r.squared
-    stat <- n * r2_bg1
-    pval <- pchisq(stat, 1, lower.tail = FALSE)
-    list(stat = stat, pval = pval)
+  # Breusch-Godfrey LM test (as Stata's estat bgodfrey): regression of the
+  # residuals on the original regressors and l lagged residuals (pre-sample
+  # values set to zero); statistic n R^2 ~ chi2(l)
+  bgtest <- function(l) tryCatch({
+    elag <- sapply(seq_len(l), function(j) c(rep(0, j), residuals[seq_len(n - j)]))
+    Z <- cbind(Xmat, elag)
+    u <- stats::lm.fit(Z, residuals)$residuals
+    r2 <- 1 - sum(u^2) / sum((residuals - mean(residuals))^2)
+    stat <- n * r2
+    list(stat = stat, pval = pchisq(stat, l, lower.tail = FALSE))
   }, error = function(e) list(stat = NA, pval = NA))
+  bg1 <- bgtest(1)
+  bg4 <- if (n > 8) bgtest(4) else list(stat = NA, pval = NA)
 
-  # Breusch-Godfrey AR(4)
-  bg4 <- tryCatch({
-    if (n > 8) {
-      resid_lags <- embed(c(rep(NA, 4), residuals), 5)
-      fit_bg4 <- lm(resid_lags[, 1] ~ resid_lags[, 2:5])
-      r2_bg4 <- summary(fit_bg4)$r.squared
-      stat <- (n - 4) * r2_bg4
-      pval <- pchisq(stat, 4, lower.tail = FALSE)
-      list(stat = stat, pval = pval)
-    } else {
-      list(stat = NA, pval = NA)
-    }
-  }, error = function(e) list(stat = NA, pval = NA))
-
-  # Breusch-Pagan heteroskedasticity test
+  # Breusch-Pagan / Cook-Weisberg test on the fitted values (as Stata's
+  # estat hettest): ESS / 2 from the regression of e^2 / (RSS / n) on yhat
   bp <- tryCatch({
-    resid_sq <- residuals^2
-    fit_bp <- lm(resid_sq ~ seq_along(residuals))
-    ess <- sum((fitted(fit_bp) - mean(resid_sq))^2)
-    tss <- sum((resid_sq - mean(resid_sq))^2)
-    r2_bp <- ess / tss
-    stat <- n * r2_bp
-    pval <- pchisq(stat, 1, lower.tail = FALSE)
-    list(stat = stat, pval = pval)
+    g <- residuals^2 / (sum(residuals^2) / n)
+    fb <- stats::lm.fit(cbind(1, fitted), g)
+    ess <- sum((g - mean(g))^2) - sum(fb$residuals^2)
+    stat <- ess / 2
+    list(stat = stat, pval = pchisq(stat, 1, lower.tail = FALSE))
   }, error = function(e) list(stat = NA, pval = NA))
 
-  # ARCH(1) test
+  # ARCH(1) LM test (as Stata's estat archlm): (n - 1) R^2 from the
+  # regression of e_t^2 on e_{t-1}^2
   arch1 <- tryCatch({
-    resid_sq <- residuals^2
-    resid_sq_lag <- c(NA, resid_sq[-n])
-    fit_arch <- lm(resid_sq ~ resid_sq_lag)
-    r2_arch <- summary(fit_arch)$r.squared
-    stat <- n * r2_arch
-    pval <- pchisq(stat, 1, lower.tail = FALSE)
-    list(stat = stat, pval = pval)
+    e2 <- residuals^2
+    fa <- stats::lm.fit(cbind(1, e2[-n]), e2[-1])
+    r2 <- 1 - sum(fa$residuals^2) / sum((e2[-1] - mean(e2[-1]))^2)
+    stat <- (n - 1) * r2
+    list(stat = stat, pval = pchisq(stat, 1, lower.tail = FALSE))
   }, error = function(e) list(stat = NA, pval = NA))
 
   return(list(

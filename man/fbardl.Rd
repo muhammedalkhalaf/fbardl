@@ -15,7 +15,8 @@ fbardl(
   reps = 999,
   fourier = TRUE,
   level = 0.95,
-  horizon = 20
+  horizon = 20,
+  unconditional = FALSE
 )
 }
 \arguments{
@@ -48,6 +49,10 @@ dependent and independent variables.}
 \item{level}{Numeric. Confidence level for intervals (default: 0.95).}
 
 \item{horizon}{Integer. Horizon for dynamic multipliers (default: 20).}
+
+\item{unconditional}{Logical. If \code{TRUE}, the contemporaneous
+differences of the regressors are excluded (the unconditional form of
+Yilanci et al., 2020, and McNown et al., 2018). Default \code{FALSE}.}
 }
 \value{
 An object of class \code{"fbardl"} containing:
@@ -88,6 +93,29 @@ The FBARDL approach extends the standard ARDL bounds testing procedure by:
   \item Implementing the McNown et al. (2018) procedure to detect degenerate cases
 }
 
+The PSS case sets the deterministic terms: a constant in all cases and a
+linear trend in cases 4 and 5. The overall F test restricts the lagged
+levels, together with the intercept in case 2 and the trend in case 4.
+
+With \code{type = "fardl"} the F and t statistics are compared with the
+finite-sample critical values and approximate p-values of Kripfganz and
+Schneider (2020), computed from their response surface coefficients
+(Stata package \code{ardl}) for the sample size, the number of
+regressors and the number of short-run coefficients (the Fourier terms
+included). These bounds do not account for the Fourier terms; the
+F test on the lagged regressors has no tabulated distribution and is
+reported with the bootstrap types only.
+
+The bootstrap types follow the Stata module \code{fbardl} 1.3.0. Data
+are generated recursively under the null from the restricted
+equilibrium-correction equation for \eqn{y} and the equations for
+\eqn{\Delta x}, resampling the residual pairs. \code{"fbardl_mcnown"}
+uses one null (all lagged levels, plus the restricted deterministic term)
+for the three statistics and an unrestricted \eqn{\Delta x} equation;
+\code{"fbardl_bvz"} uses a separate null for each statistic, a marginal
+\eqn{\Delta x} equation without the lagged level of \eqn{y}, and
+recentred residuals.
+
 The procedure involves three main steps:
 \enumerate{
   \item Selection of optimal Fourier frequency k* by minimum SSR
@@ -123,6 +151,11 @@ result_nofourier <- fbardl(y ~ x1 + x2, data = fbardl_data,
 
 }
 \references{
+Kripfganz, S. and Schneider, D. C. (2020). Response surface regressions
+for critical value bounds and approximate p-values in equilibrium
+correction models. \emph{Oxford Bulletin of Economics and Statistics},
+82(6), 1456-1481. \doi{10.1111/obes.12377}
+
 Pesaran, M. H., Shin, Y., & Smith, R. J. (2001). Bounds testing approaches
 to the analysis of level relationships. \emph{Journal of Applied Econometrics},
 16(3), 289-326. \doi{10.1002/jae.616}

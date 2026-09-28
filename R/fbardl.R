@@ -25,6 +25,9 @@
 #' @param fourier Logical. Whether to include Fourier terms (default: TRUE).
 #' @param level Numeric. Confidence level for intervals (default: 0.95).
 #' @param horizon Integer. Horizon for dynamic multipliers (default: 20).
+#' @param unconditional Logical. If \code{TRUE}, the contemporaneous
+#'   differences of the regressors are excluded (the unconditional form of
+#'   Yilanci et al., 2020, and McNown et al., 2018). Default \code{FALSE}.
 #'
 #' @return An object of class \code{"fbardl"} containing:
 #' \describe{
@@ -58,6 +61,29 @@
 #'   \item Implementing the McNown et al. (2018) procedure to detect degenerate cases
 #' }
 #'
+#' The PSS case sets the deterministic terms: a constant in all cases and a
+#' linear trend in cases 4 and 5. The overall F test restricts the lagged
+#' levels, together with the intercept in case 2 and the trend in case 4.
+#'
+#' With \code{type = "fardl"} the F and t statistics are compared with the
+#' finite-sample critical values and approximate p-values of Kripfganz and
+#' Schneider (2020), computed from their response surface coefficients
+#' (Stata package \code{ardl}) for the sample size, the number of
+#' regressors and the number of short-run coefficients (the Fourier terms
+#' included). These bounds do not account for the Fourier terms; the
+#' F test on the lagged regressors has no tabulated distribution and is
+#' reported with the bootstrap types only.
+#'
+#' The bootstrap types follow the Stata module \code{fbardl} 1.3.0. Data
+#' are generated recursively under the null from the restricted
+#' equilibrium-correction equation for \eqn{y} and the equations for
+#' \eqn{\Delta x}, resampling the residual pairs. \code{"fbardl_mcnown"}
+#' uses one null (all lagged levels, plus the restricted deterministic term)
+#' for the three statistics and an unrestricted \eqn{\Delta x} equation;
+#' \code{"fbardl_bvz"} uses a separate null for each statistic, a marginal
+#' \eqn{\Delta x} equation without the lagged level of \eqn{y}, and
+#' recentred residuals.
+#'
 #' The procedure involves three main steps:
 #' \enumerate{
 #'   \item Selection of optimal Fourier frequency k* by minimum SSR
@@ -73,6 +99,11 @@
 #' }
 #'
 #' @references
+#' Kripfganz, S. and Schneider, D. C. (2020). Response surface regressions
+#' for critical value bounds and approximate p-values in equilibrium
+#' correction models. \emph{Oxford Bulletin of Economics and Statistics},
+#' 82(6), 1456-1481. \doi{10.1111/obes.12377}
+#'
 #' Pesaran, M. H., Shin, Y., & Smith, R. J. (2001). Bounds testing approaches
 #' to the analysis of level relationships. \emph{Journal of Applied Econometrics},
 #' 16(3), 289-326. \doi{10.1002/jae.616}
@@ -113,7 +144,8 @@
 #' @export
 fbardl <- function(formula, data, type = c("fardl", "fbardl_mcnown", "fbardl_bvz"),
                    maxlag = 4, maxk = 5, ic = c("aic", "bic"), case = 3,
-                   reps = 999, fourier = TRUE, level = 0.95, horizon = 20) {
+                   reps = 999, fourier = TRUE, level = 0.95, horizon = 20,
+                   unconditional = FALSE) {
 
   # Match arguments
   type <- match.arg(type)
@@ -132,6 +164,8 @@ fbardl <- function(formula, data, type = c("fardl", "fbardl_mcnown", "fbardl_bvz
   if (!case %in% c(2, 3, 4, 5)) {
     stop("'case' must be 2, 3, 4, or 5")
   }
+  hastrend <- case %in% c(4, 5)
+  j0 <- if (isTRUE(unconditional)) 1L else 0L
 
   # Extract variables from formula
   mf <- model.frame(formula, data = data, na.action = na.pass)
@@ -189,7 +223,8 @@ fbardl <- function(formula, data, type = c("fardl", "fbardl_mcnown", "fbardl_bvz
     }
 
     # Build regression data for maximum lag
-    reg_data <- .build_ardl_data(y, X, maxlag, maxlag, fourier_sin, fourier_cos)
+    reg_data <- .build_ardl_data_flex(y, X, maxlag, rep(maxlag, nindep),
+                                      fourier_sin, fourier_cos, hastrend, j0)
 
     if (is.null(reg_data) || length(reg_data$Y) < 10) {
       ssr_by_k[i] <- Inf
@@ -249,7 +284,8 @@ fbardl <- function(formula, data, type = c("fardl", "fbardl_mcnown", "fbardl_bvz
       q_vec <- as.integer(q_combinations[qidx, ])
 
       # Build regression data
-      reg_data <- .build_ardl_data_flex(y, X, p, q_vec, fourier_sin, fourier_cos)
+      reg_data <- .build_ardl_data_flex(y, X, p, q_vec, fourier_sin, fourier_cos,
+                                        hastrend, j0)
 
       if (is.null(reg_data) || length(reg_data$Y) < 10) next
 
@@ -293,7 +329,8 @@ fbardl <- function(formula, data, type = c("fardl", "fbardl_mcnown", "fbardl_bvz
                   best_p, paste(best_q, collapse = ","), best_kstar))
 
   # Build final regression data
-  final_data <- .build_ardl_data_flex(y, X, best_p, best_q, fourier_sin, fourier_cos)
+  final_data <- .build_ardl_data_flex(y, X, best_p, best_q, fourier_sin, fourier_cos,
+                                      hastrend, j0)
 
   # Final OLS estimation
   final_fit <- lm(final_data$Y ~ final_data$Xmat - 1)
@@ -309,8 +346,11 @@ fbardl <- function(formula, data, type = c("fardl", "fbardl_mcnown", "fbardl_bvz
   pvals <- 2 * pt(abs(tvals), df = nobs - nparams, lower.tail = FALSE)
 
   # Model fit statistics
-  r2 <- summary(final_fit)$r.squared
-  r2_adj <- summary(final_fit)$adj.r.squared
+  # The design holds its own constant, so lm() is called without one and
+  # summary() would report the uncentred R-squared
+  tss <- sum((final_data$Y - mean(final_data$Y))^2)
+  r2 <- 1 - sum(final_fit$residuals^2) / tss
+  r2_adj <- 1 - (1 - r2) * (nobs - 1) / (nobs - nparams)
   rss <- sum(final_fit$residuals^2)
   ll <- -nobs/2 * (log(2 * pi) + log(rss/nobs) + 1)
   aic_val <- -2 * ll + 2 * nparams
@@ -327,10 +367,10 @@ fbardl <- function(formula, data, type = c("fardl", "fbardl_mcnown", "fbardl_bvz
 
   # ECM coefficient (coefficient on lagged dependent variable)
   ecm_idx <- which(coef_names == "L.y")
-  ecm_coef <- coefs[ecm_idx]
-  ecm_se <- se[ecm_idx]
-  ecm_t <- tvals[ecm_idx]
-  ecm_p <- pvals[ecm_idx]
+  ecm_coef <- unname(coefs[ecm_idx])
+  ecm_se <- unname(se[ecm_idx])
+  ecm_t <- unname(tvals[ecm_idx])
+  ecm_p <- unname(pvals[ecm_idx])
 
   # Indices for level variables (for F-tests)
   level_idx <- grep("^L\\.", coef_names)
@@ -338,8 +378,14 @@ fbardl <- function(formula, data, type = c("fardl", "fbardl_mcnown", "fbardl_bvz
 
   # F-test: overall (all lagged levels)
   # Compute F-statistic manually
-  R_overall <- diag(nparams)[level_idx, , drop = FALSE]
-  r_overall <- rep(0, length(level_idx))
+  # The F_ov restriction depends on the PSS case: the intercept joins it in
+  # case 2 and the trend in case 4
+  fov_names <- coef_names[level_idx]
+  if (case == 2) fov_names <- c(fov_names, "constant")
+  if (case == 4) fov_names <- c(fov_names, "trend")
+  fov_idx <- match(fov_names, coef_names)
+  R_overall <- diag(nparams)[fov_idx, , drop = FALSE]
+  r_overall <- rep(0, length(fov_idx))
   Fov_stat <- .wald_f_test(coefs, vcov_mat, R_overall, r_overall, nobs - nparams)
 
   # F-test: independent variables only
@@ -355,16 +401,14 @@ fbardl <- function(formula, data, type = c("fardl", "fbardl_mcnown", "fbardl_bvz
   # ============================================================================
 
   if (type == "fardl") {
-    # PSS bounds test with asymptotic critical values
-    coint_result <- .pss_bounds_test(Fov_stat, t_stat, Find_stat, nindep, case, nobs)
+    # Short-run coefficients: every regressor other than the constant, the
+    # trend and the k + 1 lagged levels (Fourier terms included)
+    sr <- nparams - 1L - (nindep + 1L) - as.integer(hastrend)
+    coint_result <- .pss_bounds_test(Fov_stat, t_stat, nindep, case, nobs, sr)
   } else {
-    # Bootstrap critical values
     coint_result <- .bootstrap_ardl_test(
-      y, X, best_p, best_q, best_kstar, T,
-      Fov_stat, t_stat, Find_stat,
-      type, reps, final_data, coef_names,
-      level_idx, indep_level_idx, ecm_idx
-    )
+      y, X, best_p, best_q, fourier_sin, fourier_cos, hastrend, j0,
+      case, type, reps, Fov_stat, t_stat, Find_stat, fov_names)
   }
 
   # ============================================================================
@@ -385,7 +429,8 @@ fbardl <- function(formula, data, type = c("fardl", "fbardl_mcnown", "fbardl_bvz
   # DIAGNOSTIC TESTS
   # ============================================================================
 
-  diagnostics <- .run_diagnostics(final_fit$residuals, nobs, nparams)
+  diagnostics <- .run_diagnostics(final_fit$residuals, nobs, nparams,
+                                 final_data$Xmat, final_fit$fitted.values)
 
   # ============================================================================
   # ASSEMBLE RESULTS
@@ -431,6 +476,7 @@ fbardl <- function(formula, data, type = c("fardl", "fbardl_mcnown", "fbardl_bvz
     type = type,
     ic = ic,
     case = case,
+    unconditional = isTRUE(unconditional),
     fourier = fourier,
     level = level,
     reps = if (type != "fardl") reps else NULL,
@@ -459,13 +505,13 @@ print.fbardl <- function(x, ...) {
 
   cat("\nCointegration Test Results:\n")
   cat(rep("-", 50), "\n", sep = "")
-  cat(sprintf("F-overall:     %8.4f  (p-value: %6.4f)\n",
-              x$F.overall, x$cointegration$Fov.pval))
-  cat(sprintf("t-dependent:   %8.4f  (p-value: %6.4f)\n",
-              x$t.dependent, x$cointegration$t.pval))
-  cat(sprintf("F-independent: %8.4f  (p-value: %6.4f)\n",
-              x$F.independent, x$cointegration$Find.pval))
-
+  co <- x$cointegration
+  pv <- function(v) if (length(v) == 2) sprintf("p I(0)/I(1): %6.4f / %6.4f", v[1], v[2]) else
+    if (is.na(v)) "p-value: n/a" else sprintf("p-value: %6.4f", v)
+  cat(sprintf("F-overall:     %8.4f  (%s)\n", x$F.overall, pv(co$Fov.pval)))
+  cat(sprintf("t-dependent:   %8.4f  (%s)\n", x$t.dependent, pv(co$t.pval)))
+  cat(sprintf("F-independent: %8.4f  (%s)\n", x$F.independent, pv(co$Find.pval)))
+  cat("Critical values: ", co$source, "\n", sep = "")
   cat("\nDecision: ", x$cointegration$decision, "\n", sep = "")
 
   cat("\nError Correction Coefficient: ", sprintf("%.6f", x$ecm.coef), "\n", sep = "")
@@ -569,19 +615,26 @@ summary.fbardl <- function(object, ...) {
   cat(rep("-", 68), "\n", sep = "")
 
   coint <- object$cointegration
-  cat(sprintf("  F-overall:     %8.4f  5%% CV: [%.3f, %.3f]  p-value: %.4f%s\n",
-              object$F.overall,
-              coint$F.cv05.I0, coint$F.cv05.I1,
-              coint$Fov.pval, .stars(coint$Fov.pval)))
-  cat(sprintf("  t-dependent:   %8.4f  5%% CV: [%.3f, %.3f]  p-value: %.4f%s\n",
-              object$t.dependent,
-              coint$t.cv05.I0, coint$t.cv05.I1,
-              coint$t.pval, .stars(coint$t.pval)))
-  cat(sprintf("  F-independent: %8.4f  5%% CV: %.3f          p-value: %.4f%s\n",
-              object$F.independent,
-              ifelse(!is.null(coint$Find.cv05), coint$Find.cv05, NA),
-              coint$Find.pval, .stars(coint$Find.pval)))
-
+  cat("  Critical values: ", coint$source, "\n", sep = "")
+  if (coint$source == "bootstrap") {
+    row <- function(lab, stat, cv, pval) {
+      cat(sprintf("  %-14s %9.4f  CV 10%%/5%%/1%%: %8.3f %8.3f %8.3f  p = %.4f%s\n",
+                  lab, stat, cv["10%"], cv["5%"], cv["1%"], pval, .stars(pval)))
+    }
+    row("F-overall:", object$F.overall, coint$F.cv, coint$Fov.pval)
+    row("t-dependent:", object$t.dependent, coint$t.cv, coint$t.pval)
+    row("F-independent:", object$F.independent, coint$Find.cv, coint$Find.pval)
+  } else {
+    row <- function(lab, stat, cv, pval) {
+      cat(sprintf("  %-14s %9.4f  5%% bounds [%.3f, %.3f]  1%% bounds [%.3f, %.3f]  p I(0)/I(1) = %.4f / %.4f\n",
+                  lab, stat, cv["I0", "5%"], cv["I1", "5%"], cv["I0", "1%"],
+                  cv["I1", "1%"], pval[1], pval[2]))
+    }
+    row("F-overall:", object$F.overall, coint$F.cv, coint$Fov.pval)
+    row("t-dependent:", object$t.dependent, coint$t.cv, coint$t.pval)
+    cat(sprintf("  %-14s %9.4f  (no tabulated critical values; use a bootstrap type)\n",
+                "F-independent:", object$F.independent))
+  }
   cat("\n  Decision: ", coint$decision, "\n", sep = "")
   cat(rep("-", 68), "\n", sep = "")
 
