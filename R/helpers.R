@@ -52,6 +52,71 @@
 }
 
 
+#' All candidate columns of .build_ardl_data_flex on every row t = 1..n
+#' (NA where a lag is not available), for fast repeated selection
+#' @noRd
+.fbardl_allcols <- function(y, X, maxlag, j0 = 0L) {
+  n <- length(y)
+  K <- ncol(X)
+  dy <- c(NA_real_, diff(y))
+  dX <- rbind(NA_real_, diff(X))
+  lagv <- function(v, j) c(rep(NA_real_, j), v[seq_len(n - j)])
+  xn <- colnames(X)
+  cols <- list(lagv(y, 1L))
+  nm <- "L.y"
+  for (j in seq_len(K)) {
+    cols[[length(cols) + 1L]] <- lagv(X[, j], 1L)
+    nm <- c(nm, paste0("L.", xn[j]))
+  }
+  for (lag in seq_len(maxlag)) {
+    cols[[length(cols) + 1L]] <- lagv(dy, lag)
+    nm <- c(nm, paste0("L", lag, ".D.y"))
+  }
+  # dX column of regressor j at lag l (l = j0..maxlag)
+  idx_dx <- matrix(NA_integer_, K, maxlag + 1L)
+  for (j in seq_len(K)) for (lag in j0:maxlag) {
+    cols[[length(cols) + 1L]] <- lagv(dX[, j], lag)
+    nm <- c(nm, if (lag == 0) paste0("D.", xn[j]) else paste0("L", lag, ".D.", xn[j]))
+    idx_dx[j, lag + 1L] <- length(cols)
+  }
+  M <- do.call(cbind, cols)
+  colnames(M) <- nm
+  list(M = M, dy = dy, xn = xn, n = n, K = K, idx_dx = idx_dx)
+}
+
+
+#' Design of .build_ardl_data_flex taken from .fbardl_allcols (identical
+#' values and column order). 'D' holds the deterministic columns that follow
+#' the stochastic ones (Fourier sin and cos, trend, constant) on rows 1..n.
+#' @noRd
+.fbardl_subdesign <- function(A, p, q_vec, D, j0 = 0L, names = TRUE) {
+  n <- A$n
+  K <- A$K
+  start_idx <- max(p, max(q_vec)) + 2L
+  if (start_idx > n) return(NULL)
+  rows <- start_idx:n
+  idx <- c(seq_len(1L + K), 1L + K + seq_len(p))
+  for (j in seq_len(K)) if (q_vec[j] >= j0) idx <- c(idx, A$idx_dx[j, (j0:q_vec[j]) + 1L])
+  if (is.null(D)) {
+    # A$M already holds the deterministic columns after the stochastic ones
+    Xmat <- A$M[rows, c(idx, A$idx_det), drop = FALSE]
+  } else {
+    Xmat <- cbind(A$M[rows, idx, drop = FALSE], D[rows, , drop = FALSE])
+  }
+  nm <- if (names) colnames(Xmat) else NULL
+  list(Y = A$dy[rows], Xmat = Xmat, coef_names = nm, rows = rows)
+}
+
+
+#' Deterministic columns of the design (sin, cos, trend, constant) on rows 1..n
+#' @noRd
+.fbardl_detcols <- function(n, fs, trend) {
+  D <- cbind(sin = fs$sin, cos = fs$cos)
+  if (trend) D <- cbind(D, trend = as.numeric(seq_len(n)))
+  cbind(D, constant = rep(1, n))
+}
+
+
 #' Wald F-test
 #' @noRd
 .wald_f_test <- function(coefs, vcov_mat, R, r, df_resid) {
@@ -69,10 +134,15 @@
 #' Finite-sample critical values and approximate p-values from the response
 #' surface regressions of Kripfganz and Schneider (2020). The F_ind test has
 #' no tabulated distribution; it is reported only with the bootstrap types.
+#' With Fourier terms in the model (valid = FALSE) no valid bounds exist: the
+#' bounds of the model without Fourier terms are returned for reference, with
+#' no p-values and no decision.
 #' @noRd
-.pss_bounds_test <- function(Fov_stat, t_stat, k, case, nobs, sr) {
-  Fb <- .ks_bounds("F", case, k, nobs, sr, value = Fov_stat)
-  tb <- .ks_bounds("t", case, k, nobs, sr, value = t_stat)
+.pss_bounds_test <- function(Fov_stat, t_stat, k, case, nobs, sr, valid = TRUE) {
+  Fb <- .ks_bounds("F", case, k, nobs, sr, value = if (valid) Fov_stat)
+  tb <- .ks_bounds("t", case, k, nobs, sr, value = if (valid) t_stat)
+  pF <- if (valid) Fb$pvalue else c(NA_real_, NA_real_)
+  pt <- if (valid) tb$pvalue else c(NA_real_, NA_real_)
   dec <- function(stat, lo, hi, upper) {
     if (anyNA(c(lo, hi))) return(NA_character_)
     if (upper) {
@@ -81,228 +151,226 @@
       if (stat < hi) "reject" else if (stat > lo) "do not reject" else "inconclusive"
     }
   }
-  F_dec <- dec(Fov_stat, Fb$cv["I0", "5%"], Fb$cv["I1", "5%"], TRUE)
-  t_dec <- dec(t_stat, tb$cv["I0", "5%"], tb$cv["I1", "5%"], FALSE)
-  decision <- if (anyNA(c(F_dec, t_dec))) {
-    "Critical values unavailable (fewer than twice as many observations as coefficients)"
-  } else if (F_dec == "reject" && t_dec == "reject") {
-    "COINTEGRATION: F and t beyond the I(1) bounds at 5%"
-  } else if (F_dec == "do not reject" || t_dec == "do not reject") {
-    "NO COINTEGRATION: F or t within the I(0) bound at 5%"
+  if (!valid) {
+    code <- "NOT_AVAILABLE"
+    decision <- paste("NOT AVAILABLE: no valid bounds exist with Fourier terms;",
+                      "use type = \"fbardl_bvz\" or \"fbardl_mcnown\"")
   } else {
-    "INCONCLUSIVE at 5% (statistic between the bounds)"
+    F_dec <- dec(Fov_stat, Fb$cv["I0", "5%"], Fb$cv["I1", "5%"], TRUE)
+    t_dec <- dec(t_stat, tb$cv["I0", "5%"], tb$cv["I1", "5%"], FALSE)
+    if (anyNA(c(F_dec, t_dec))) {
+      code <- "UNAVAILABLE"
+      decision <- "Critical values unavailable (fewer than twice as many observations as coefficients)"
+    } else if (F_dec == "reject" && t_dec == "reject") {
+      code <- "COINTEGRATION"
+      decision <- "COINTEGRATION: F and t beyond the I(1) bounds at 5%"
+    } else if (F_dec == "do not reject" || t_dec == "do not reject") {
+      code <- "NO_COINTEGRATION"
+      decision <- "NO COINTEGRATION: F or t within the I(0) bound at 5%"
+    } else {
+      code <- "INCONCLUSIVE"
+      decision <- "INCONCLUSIVE at 5% (statistic between the bounds)"
+    }
   }
   list(
-    source = "Kripfganz and Schneider (2020)",
+    source = if (valid) "Kripfganz and Schneider (2020)" else
+      paste("Kripfganz and Schneider (2020): bounds for the model without",
+            "Fourier terms; not valid with Fourier terms"),
+    valid = valid,
     sr = sr,
     F.cv = Fb$cv, t.cv = tb$cv,
-    Fov.pval = Fb$pvalue, t.pval = tb$pvalue, Find.pval = NA_real_,
+    Fov.pval = pF, t.pval = pt, Find.pval = NA_real_,
     F.cv05.I0 = unname(Fb$cv["I0", "5%"]), F.cv05.I1 = unname(Fb$cv["I1", "5%"]),
     t.cv05.I0 = unname(tb$cv["I0", "5%"]), t.cv05.I1 = unname(tb$cv["I1", "5%"]),
     Find.cv05 = NA_real_,
-    decision = decision)
+    decision = decision, decision.code = code)
 }
 
 
-#' Bootstrap ARDL test (McNown, Sam and Goh 2018; Bertelli, Vacca and Zoia 2022)
-#'
-#' Port of _fbardl_bootstrap.ado (Stata fbardl 1.3.0). Bootstrap data are
-#' generated recursively from the restricted y equation (one null for the
-#' McNown et al. version, one per statistic for Bertelli et al.) and the
-#' equations for Delta x, resampling the residual pairs; the full model is
-#' re-estimated on each bootstrap sample.
+#' Fourier terms sin(2 pi k t / n), cos(2 pi k t / n), t = 1..n
 #' @noRd
-.bootstrap_ardl_test <- function(y, X, best_p, best_q, fsin, fcos, trend, j0,
-                                 case, type, reps, Fov_stat, t_stat, Find_stat,
-                                 fov_names, dgpcheck = FALSE) {
-  T <- length(y); K <- ncol(X); p <- best_p
-  xn <- colnames(X)
-  des <- function(yy, XX) .build_ardl_data_flex(yy, XX, p, best_q, fsin, fcos, trend, j0)
-  full <- des(y, X)
-  cn <- full$coef_names
-  ind_names <- paste0("L.", xn)
+.fbardl_fourier <- function(n, k) {
+  tt <- 1:n
+  if (k > 0) list(sin = sin(2 * pi * k * tt / n), cos = cos(2 * pi * k * tt / n))
+  else list(sin = NULL, cos = NULL)
+}
 
-  nnull <- if (type == "fbardl_mcnown") 1L else 3L
-  nulluse <- if (type == "fbardl_mcnown") c(1L, 1L, 1L) else 1:3
-  drops <- list(fov_names, "L.y", ind_names)
 
-  ## restricted y equations
-  eqY <- lapply(seq_len(nnull), function(h) {
-    keep <- setdiff(cn, drops[[h]])
-    Z <- full$Xmat[, keep, drop = FALSE]
-    b <- stats::lm.fit(Z, full$Y)$coefficients
-    b[is.na(b)] <- 0
-    coef <- stats::setNames(rep(0, length(cn)), cn)
-    coef[keep] <- b
-    xb <- rep(NA_real_, T); r <- rep(NA_real_, T)
-    xb[full$rows] <- as.numeric(Z %*% b)
-    r[full$rows] <- full$Y - xb[full$rows]
-    list(coef = coef, xb = xb, r = r)
-  })
-
-  ## equations for Delta x
-  dy0 <- c(0, diff(y)); dX0 <- rbind(0, diff(X))
-  rowsx <- (p + 2L):T
-  Zx <- cbind(if (type == "fbardl_mcnown") y[rowsx - 1L],
-              X[rowsx - 1L, , drop = FALSE],
-              do.call(cbind, lapply(seq_len(p), function(j)
-                cbind(dy0[rowsx - j], dX0[rowsx - j, , drop = FALSE]))),
-              if (!is.null(fsin)) cbind(fsin[rowsx], fcos[rowsx]),
-              if (trend) as.numeric(rowsx), 1)
-  eqX <- lapply(seq_len(K), function(m) {
-    b <- stats::lm.fit(Zx, dX0[rowsx, m])$coefficients
-    b[is.na(b)] <- 0
-    xb <- rep(NA_real_, T); r <- rep(NA_real_, T)
-    xb[rowsx] <- as.numeric(Zx %*% b)
-    r[rowsx] <- dX0[rowsx, m] - xb[rowsx]
-    off <- if (type == "fbardl_mcnown") 1L else 0L
-    list(by = if (off) b[1] else 0, bx = b[off + seq_len(K)],
-         phi = b[off + K + (seq_len(p) - 1L) * (K + 1L) + 1L],
-         th = matrix(b[off + K + outer(seq_len(K) + 1L, (seq_len(p) - 1L) * (K + 1L), `+`)],
-                     K, p),
-         xb = xb, r = r)
-  })
-
-  ## history parts evaluated on any series
-  fity <- function(Ys, Xs, dYs, dXs, t, co) {
-    v <- co[["L.y"]] * Ys[t - 1L] + sum(co[paste0("L.", xn)] * Xs[t - 1L, ])
-    for (j in seq_len(p)) v <- v + co[[paste0("L", j, ".D.y")]] * dYs[t - j]
-    for (m in seq_len(K)) if (best_q[m] >= j0) for (j in j0:best_q[m]) {
-      nm <- if (j == 0) paste0("D.", xn[m]) else paste0("L", j, ".D.", xn[m])
-      v <- v + co[[nm]] * dXs[t - j, m]
-    }
-    v
+#' Selection of k* (minimum SSR, every lag at maxlag) and of (p, q) (AIC or
+#' BIC, k* fixed), as in fbardl 1.1.0. A k* or lags given by the user are
+#' used as they are. The same function is used on the data and on every
+#' bootstrap sample.
+#' @noRd
+.fbardl_select <- function(y, X, setup) {
+  n <- length(y)
+  nindep <- ncol(X)
+  maxlag <- setup$maxlag
+  hastrend <- setup$hastrend
+  j0 <- setup$j0
+  A <- .fbardl_allcols(y, X, max(maxlag, setup$lags$p, setup$lags$q), j0)
+  ssr_of <- function(d) {
+    if (is.null(d) || length(d$Y) < 10) return(NULL)
+    if (!all(is.finite(d$Xmat)) || !all(is.finite(d$Y))) return(NULL)
+    f <- stats::.lm.fit(d$Xmat, d$Y)
+    list(rss = sum(f$residuals^2), nobs = length(f$residuals), k = ncol(d$Xmat))
   }
-  fitx <- function(Ys, Xs, dYs, dXs, t, e) {
-    v <- e$by * Ys[t - 1L] + sum(e$bx * Xs[t - 1L, ])
-    for (j in seq_len(p)) v <- v + e$phi[j] * dYs[t - j] + sum(e$th[, j] * dXs[t - j, ])
-    v
-  }
-
-  ok <- Reduce(`&`, c(lapply(eqY, function(e) !is.na(e$r)),
-                      lapply(eqX, function(e) !is.na(e$r))))
-  pool <- which(ok)
-  t0 <- min(pool); tN <- max(pool)
-  detY <- sapply(eqY, function(e) {
-    d <- e$xb
-    for (t in pool) d[t] <- d[t] - fity(y, X, dy0, dX0, t, e$coef)
-    d
-  })
-  detY <- matrix(detY, T)
-  detX <- sapply(eqX, function(e) {
-    d <- e$xb
-    for (t in pool) d[t] <- d[t] - fitx(y, X, dy0, dX0, t, e)
-    d
-  })
-  detX <- matrix(detX, T)
-  poolY <- sapply(eqY, `[[`, "r"); poolY <- matrix(poolY, T)
-  poolX <- sapply(eqX, `[[`, "r"); poolX <- matrix(poolX, T)
-  npool <- length(pool)
-
-  recurse <- function(eY, eX, h) {
-    Ys <- y; Xs <- X; dYs <- dy0; dXs <- dX0
-    for (t in t0:tN) {
-      for (i in seq_len(K)) {
-        dxi <- detX[t, i] + eX[t, i] + fitx(Ys, Xs, dYs, dXs, t, eqX[[i]])
-        dXs[t, i] <- dxi
-        Xs[t, i] <- Xs[t - 1L, i] + dxi
-      }
-      dyt <- detY[t, h] + eY[t] + fity(Ys, Xs, dYs, dXs, t, eqY[[h]]$coef)
-      dYs[t] <- dyt
-      Ys[t] <- Ys[t - 1L] + dyt
-    }
-    list(y = Ys, X = Xs)
-  }
-
-  if (dgpcheck) {
-    dev <- vapply(seq_len(nnull), function(h) {
-      eY <- rep(0, T); eX <- matrix(0, T, K)
-      eY[t0:tN] <- poolY[t0:tN, h]; eX[t0:tN, ] <- poolX[t0:tN, ]
-      r <- recurse(eY, eX, h)
-      max(abs(r$y - y), abs(r$X - X))
-    }, numeric(1))
-    return(dev)
-  }
-
-  # McNown et al.: residuals recentred once (Stata fbardl recmode 1)
-  if (type == "fbardl_mcnown") {
-    div <- npool - p - 1
-    if (div < 1) div <- npool
-    for (h in seq_len(nnull)) poolY[pool, h] <- poolY[pool, h] - sum(poolY[pool, h]) / div
-    for (m in seq_len(K)) poolX[pool, m] <- poolX[pool, m] - sum(poolX[pool, m]) / div
-  }
-
-  stat_fun <- function(yy, XX) {
-    d <- des(yy, XX)
-    fit <- stats::lm.fit(d$Xmat, d$Y)
-    if (fit$rank < ncol(d$Xmat)) return(c(NA, NA, NA))
-    e <- fit$residuals
-    s2 <- sum(e^2) / (length(e) - ncol(d$Xmat))
-    V <- s2 * chol2inv(qr.R(fit$qr))
-    b <- fit$coefficients
-    Ftest <- function(nms) {
-      i <- match(nms, d$coef_names)
-      as.numeric(t(b[i]) %*% solve(V[i, i, drop = FALSE]) %*% b[i]) / length(i)
-    }
-    iy <- match("L.y", d$coef_names)
-    c(Ftest(fov_names), b[iy] / sqrt(V[iy, iy]), Ftest(ind_names))
-  }
-
-  stats_mat <- matrix(NA_real_, reps, 3)
-  for (bb in seq_len(reps)) {
-    last <- 0L; cur <- NULL
-    for (s in 1:3) {
-      h <- nulluse[s]
-      if (h != last) {
-        idx <- pool[ceiling(stats::runif(npool) * npool)]
-        eY <- rep(0, T); eX <- matrix(0, T, K)
-        eY[t0:tN] <- poolY[idx, h]; eX[t0:tN, ] <- poolX[idx, , drop = FALSE]
-        if (type != "fbardl_mcnown") {
-          eY[t0:tN] <- eY[t0:tN] - mean(eY[t0:tN])
-          eX[t0:tN, ] <- sweep(eX[t0:tN, , drop = FALSE], 2,
-                               colMeans(eX[t0:tN, , drop = FALSE]))
-        }
-        r <- recurse(eY, eX, h)
-        cur <- tryCatch(stat_fun(r$y, r$X), error = function(e) c(NA, NA, NA))
-        last <- h
-      }
-      stats_mat[bb, s] <- cur[s]
-    }
-  }
-
-  qhi <- function(v, pr) { v <- sort(v[!is.na(v)]); if (length(v) < 3) NA else v[min(ceiling(pr * length(v)), length(v))] }
-  qlo <- function(v, pr) { v <- sort(v[!is.na(v)]); if (length(v) < 3) NA else v[max(floor(pr * length(v)), 1)] }
-  Fb <- stats_mat[, 1]; tb <- stats_mat[, 2]; Ib <- stats_mat[, 3]
-  lv <- c(0.10, 0.05, 0.025, 0.01)
-  F_cv <- sapply(1 - lv, qhi, v = Fb); t_cv <- sapply(lv, qlo, v = tb)
-  I_cv <- sapply(1 - lv, qhi, v = Ib)
-  names(F_cv) <- names(t_cv) <- names(I_cv) <- c("10%", "5%", "2.5%", "1%")
-  Fov_pval <- mean(Fb[!is.na(Fb)] >= Fov_stat)
-  t_pval <- mean(tb[!is.na(tb)] <= t_stat)
-  Find_pval <- mean(Ib[!is.na(Ib)] >= Find_stat)
-
-  if (Fov_pval < 0.05 && t_pval < 0.05 && Find_pval < 0.05) {
-    decision <- "COINTEGRATION detected (all tests significant at 5%)"
-  } else if (Fov_pval >= 0.05 && t_pval >= 0.05 && Find_pval >= 0.05) {
-    decision <- "NO COINTEGRATION detected at 5% level"
-  } else if (Fov_pval < 0.05 && Find_pval < 0.05 && t_pval >= 0.05) {
-    decision <- "DEGENERATE CASE #1: Fov & Find significant but t not (y may be I(0))"
-  } else if (Fov_pval < 0.05 && t_pval < 0.05 && Find_pval >= 0.05) {
-    decision <- "DEGENERATE CASE #2: Fov & t significant but Find not"
+  ## Step 1: k*
+  ssr_by_k <- NULL
+  best_ssr_k <- NA_real_
+  if (setup$fourier && !is.null(setup$kstar)) {
+    best_kstar <- setup$kstar
   } else {
-    decision <- "PARTIAL EVIDENCE: check individual test results"
+    kv <- if (setup$fourier) setup$kvalues else 0
+    best_kstar <- 0
+    best_ssr_k <- Inf
+    ssr <- numeric(length(kv))
+    for (i in seq_along(kv)) {
+      fs <- .fbardl_fourier(n, kv[i])
+      s <- ssr_of(.fbardl_subdesign(A, maxlag, rep(maxlag, nindep),
+                                    .fbardl_detcols(n, fs, hastrend), j0, FALSE))
+      ssr[i] <- if (is.null(s)) Inf else s$rss
+      if (ssr[i] < best_ssr_k) {
+        best_ssr_k <- ssr[i]
+        best_kstar <- kv[i]
+      }
+    }
+    if (!setup$fourier) best_kstar <- 0
+    ssr_by_k <- data.frame(k = kv, ssr = ssr)
   }
+  ## Step 2: lags
+  fs <- .fbardl_fourier(n, best_kstar)
+  AD <- A
+  AD$M <- cbind(A$M, .fbardl_detcols(n, fs, hastrend))
+  AD$idx_det <- (ncol(A$M) + 1L):ncol(AD$M)
+  icval <- function(s) {
+    ll <- -s$nobs/2 * (log(2 * pi) + log(s$rss/s$nobs) + 1)
+    if (setup$ic == "aic") -2 * ll + 2 * s$k else -2 * ll + s$k * log(s$nobs)
+  }
+  if (!is.null(setup$lags)) {
+    s <- ssr_of(.fbardl_subdesign(AD, setup$lags$p, setup$lags$q, NULL, j0, FALSE))
+    if (is.null(s)) stop("the model with the lags given in 'lags' cannot be estimated")
+    return(list(p = setup$lags$p, q = setup$lags$q, kstar = best_kstar,
+                ic = icval(s), ssr_by_k = ssr_by_k, best_ssr_k = best_ssr_k,
+                total_specs = 1L))
+  }
+  best_ic_val <- Inf
+  best_p <- 1
+  best_q <- rep(0, nindep)
+  total_specs <- 0
+  q_combinations <- as.matrix(expand.grid(replicate(nindep, 0:maxlag, simplify = FALSE)))
+  for (p in 1:maxlag) {
+    for (qidx in seq_len(nrow(q_combinations))) {
+      total_specs <- total_specs + 1
+      q_vec <- as.integer(q_combinations[qidx, ])
+      s <- ssr_of(.fbardl_subdesign(AD, p, q_vec, NULL, j0, FALSE))
+      if (is.null(s)) next
+      ic_tmp <- icval(s)
+      if (ic_tmp < best_ic_val) {
+        best_ic_val <- ic_tmp
+        best_p <- p
+        best_q <- q_vec
+      }
+    }
+  }
+  list(p = best_p, q = best_q, kstar = best_kstar, ic = best_ic_val,
+       ssr_by_k = ssr_by_k, best_ssr_k = best_ssr_k, total_specs = total_specs)
+}
 
+
+#' Fov, t and Find on a design built by .build_ardl_data_flex (Wald F with
+#' the OLS covariance, as for the reported statistics)
+#' @noRd
+.fbardl_stats <- function(d, fov_names, ind_names) {
+  if (!all(is.finite(d$Xmat)) || !all(is.finite(d$Y))) stop("non-finite design")
+  qx <- qr(d$Xmat)
+  if (qx$rank < ncol(d$Xmat)) stop("rank-deficient design")
+  b <- qr.coef(qx, d$Y)
+  e <- qr.resid(qx, d$Y)
+  piv <- order(qx$pivot)
+  V <- sum(e^2) / (length(e) - ncol(d$Xmat)) *
+    chol2inv(qr.R(qx))[piv, piv, drop = FALSE]
+  Ftest <- function(nms) {
+    i <- match(nms, d$coef_names)
+    as.numeric(t(b[i]) %*% solve(V[i, i, drop = FALSE]) %*% b[i]) / length(i)
+  }
+  iy <- match("L.y", d$coef_names)
+  c(Fov = Ftest(fov_names), t = unname(b[iy] / sqrt(V[iy, iy])),
+    Find = Ftest(ind_names))
+}
+
+
+#' Bootstrap ARDL test through the shared engine (R/ardl_boot_engine.R)
+#'
+#' "fbardl_bvz": separate nulls for Fov, t and Find (Bertelli, Vacca and
+#' Zoia, 2022), marginal VECM for Delta x, residuals recentred after each
+#' draw, random block of initial values. "fbardl_mcnown": the Fov null for
+#' all statistics (McNown, Sam and Goh, 2018, Steps 1-8), applied to the
+#' conditional ECM unless unconditional = TRUE (j0 = 1, MSG eq. 12);
+#' unrestricted Delta x equation with y_{t-1}, residuals recentred once by
+#' their mean, observed initial values.
+#' The restricted equations are estimated once with the data-selected k*, p
+#' and q; the Fourier terms of the data-generating process are held fixed.
+#' On every bootstrap sample k* and the lags are selected again unless the
+#' user fixed them, and the statistics are computed exactly as on the data.
+#' @noRd
+.fbardl_bootstrap <- function(y, X, sel, setup, type, reps, fov_names,
+                              ind_names, seed = NULL) {
+  n <- length(y)
+  xn <- colnames(X)
+  fs <- .fbardl_fourier(n, sel$kstar)
+  det <- if (sel$kstar > 0) cbind(sin = fs$sin, cos = fs$cos) else NULL
+  stat_fun <- function(yy, xx, sp) {
+    xx <- as.matrix(xx)
+    colnames(xx) <- xn
+    f <- .fbardl_fourier(length(yy), sp$kstar)
+    d <- .build_ardl_data_flex(yy, xx, sp$p, sp$q, f$sin, f$cos,
+                               setup$hastrend, setup$j0)
+    .fbardl_stats(d, fov_names, ind_names)
+  }
+  need_k <- setup$fourier && is.null(setup$kstar)
+  need_l <- is.null(setup$lags)
+  selfun <- NULL
+  if (need_k || need_l) {
+    fix <- setup
+    selfun <- function(yy, xx) {
+      xx <- as.matrix(xx)
+      colnames(xx) <- xn
+      .fbardl_select(yy, xx, fix)[c("p", "q", "kstar")]
+    }
+  }
+  bvz <- type == "fbardl_bvz"
+  run <- function() .ardl_boot_engine(
+    y, X, p = sel$p, q = sel$q, case = setup$case, det = det, j0 = setup$j0,
+    nulls = if (bvz) "separate" else "joint",
+    xmodel = if (bvz) "vecm" else "var",
+    B = reps,
+    init = if (bvz) "block" else "observed",
+    recentre = if (bvz) "draw" else "once",
+    stat_fun = stat_fun, select = selfun, spec = sel[c("p", "q", "kstar")],
+    use_find = TRUE, level = 0.05, seed = seed)
+  eng <- run()
+
+  nm <- c("10%", "5%", "2.5%", "1%")
+  F_cv <- stats::setNames(eng$cv[, "Fov"], nm)
+  t_cv <- stats::setNames(eng$cv[, "t"], nm)
+  I_cv <- stats::setNames(eng$cv[, "Find"], nm)
   list(
     source = "bootstrap",
-    Fov.pval = Fov_pval, t.pval = t_pval, Find.pval = Find_pval,
+    scheme = if (bvz) "Bertelli, Vacca and Zoia (2022)" else "McNown, Sam and Goh (2018)",
+    Fov.pval = unname(eng$p_value["Fov"]), t.pval = unname(eng$p_value["t"]),
+    Find.pval = unname(eng$p_value["Find"]),
     F.cv = F_cv, t.cv = t_cv, Find.cv = I_cv,
     F.cv05.I0 = NA_real_, F.cv05.I1 = unname(F_cv["5%"]),
     t.cv05.I0 = NA_real_, t.cv05.I1 = unname(t_cv["5%"]),
     Find.cv05 = unname(I_cv["5%"]),
-    nvalid = colSums(!is.na(stats_mat)),
-    decision = decision,
-    Fov.boot = Fb, t.boot = tb, Find.boot = Ib)
+    nvalid = eng$n_valid, nfail = eng$n_fail,
+    decision = eng$label, decision.code = eng$decision,
+    reselect = c(kstar = need_k, lags = need_l),
+    dgpcheck = eng$dgpcheck, design_check = eng$design_check,
+    engine.version = eng$engine_version,
+    settings = eng$settings,
+    Fov.boot = unname(eng$boot[, "Fov"]), t.boot = unname(eng$boot[, "t"]),
+    Find.boot = unname(eng$boot[, "Find"]))
 }
 
 

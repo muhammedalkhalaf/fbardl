@@ -5,12 +5,13 @@
 \alias{fbardl-package}
 \title{fbardl: Fourier Bootstrap ARDL Cointegration Test}
 \description{
-Implements the Fourier Bootstrap Autoregressive Distributed Lag (FBARDL) bounds testing approach for cointegration analysis. Combines the Pesaran, Shin & Smith (2001) \doi{10.1002/jae.616} ARDL bounds testing framework with Fourier terms to capture structural breaks following Yilanci, Bozoklu & Gorus (2020) \doi{10.1016/j.scs.2020.102035}, and bootstrap critical values based on McNown, Sam & Goh (2018) \doi{10.1080/00036846.2017.1366643} and Bertelli, Vacca & Zoia (2022) \doi{10.1016/j.econmod.2022.105987}. Features include automatic lag selection via AIC/BIC, optimal Fourier frequency selection by minimum SSR, long-run and short-run coefficient estimation, diagnostic tests, and dynamic multiplier analysis.
+Implements the Fourier Bootstrap Autoregressive Distributed Lag (FBARDL) bounds testing approach for cointegration analysis. Combines the Pesaran, Shin and Smith (2001) \doi{10.1002/jae.616} ARDL bounds testing framework with Fourier terms to capture smooth structural breaks, as in Yilanci, Bozoklu and Gorus (2020) \doi{10.1016/j.scs.2020.102035}, and recursive bootstrap critical values following McNown, Sam and Goh (2018) \doi{10.1080/00036846.2017.1366643} and Bertelli, Vacca and Zoia (2022) \doi{10.1016/j.econmod.2022.105987}, with the Fourier frequency and the lags selected again in every bootstrap replication (a package choice); finite-sample bounds test critical values from Kripfganz and Schneider (2020) \doi{10.1111/obes.12377} for models without Fourier terms. Features include lag selection via AIC/BIC, Fourier frequency selection by minimum SSR, long-run and short-run coefficient estimation and diagnostic tests.
 
-The fbardl package implements the Fourier Bootstrap ARDL bounds testing
-approach for cointegration analysis. It combines the Pesaran, Shin & Smith
-(2001) ARDL framework with Fourier terms to capture structural breaks,
-and provides bootstrap critical values for robust inference.
+The fbardl package implements ARDL bounds tests for cointegration
+(Pesaran, Shin and Smith, 2001) with optional Fourier terms for smooth
+breaks and recursive bootstrap critical values (McNown, Sam and Goh, 2018;
+Bertelli, Vacca and Zoia, 2022). With Fourier terms only the bootstrap
+types give valid inference.
 }
 \section{Main Function}{
 
@@ -22,9 +23,10 @@ and provides bootstrap critical values for robust inference.
 \section{Test Types}{
 
 \itemize{
-  \item \code{"fardl"}: Standard Fourier ARDL with PSS bounds test
-  \item \code{"fbardl_mcnown"}: Bootstrap ARDL (McNown, Sam & Goh, 2018)
-  \item \code{"fbardl_bvz"}: Bootstrap ARDL (Bertelli, Vacca & Zoia, 2022)
+  \item \code{"fbardl_bvz"} (default): Bootstrap ARDL (Bertelli, Vacca and Zoia, 2022)
+  \item \code{"fbardl_mcnown"}: Bootstrap ARDL (McNown, Sam and Goh, 2018)
+  \item \code{"fardl"}: Kripfganz and Schneider (2020) bounds, valid
+    without Fourier terms only
 }
 }
 
@@ -36,22 +38,19 @@ and provides bootstrap critical values for robust inference.
 }
 
 \references{
-Pesaran, M. H., Shin, Y., & Smith, R. J. (2001). Bounds testing approaches
-to the analysis of level relationships. \emph{Journal of Applied Econometrics},
-16(3), 289-326. \doi{10.1002/jae.616}
+Bertelli, S., Vacca, G. and Zoia, M. (2022). Bootstrap cointegration
+tests in ARDL models. \emph{Economic Modelling}, 116, 105987.
+\doi{10.1016/j.econmod.2022.105987}
 
-McNown, R., Sam, C. Y., & Goh, S. K. (2018). Bootstrapping the autoregressive
-distributed lag test for cointegration. \emph{Applied Economics}, 50(13),
-1509-1521. \doi{10.1080/00036846.2017.1366643}
+McNown, R., Sam, C. Y. and Goh, S. K. (2018). Bootstrapping the
+autoregressive distributed lag test for cointegration. \emph{Applied
+Economics}, 50(13), 1509-1521. \doi{10.1080/00036846.2017.1366643}
+
+Pesaran, M. H., Shin, Y. and Smith, R. J. (2001). Bounds testing
+approaches to the analysis of level relationships. \emph{Journal of
+Applied Econometrics}, 16(3), 289-326. \doi{10.1002/jae.616}
 }
 \seealso{
-Useful links:
-\itemize{
-  \item \url{https://github.com/muhammedalkhalaf/fbardl}
-  \item Report bugs at \url{https://github.com/muhammedalkhalaf/fbardl/issues}
-}
-
-
 Useful links:
 \itemize{
   \item \url{https://github.com/muhammedalkhalaf/fbardl}
@@ -62,6 +61,10 @@ Useful links:
 \author{
 \strong{Maintainer}: Muhammad Alkhalaf \email{muhammedalkhalaf@gmail.com} (\href{https://orcid.org/0009-0002-2677-9246}{ORCID}) [copyright holder]
 
+Authors:
+\itemize{
+  \item Muhammad Alkhalaf \email{muhammedalkhalaf@gmail.com} (\href{https://orcid.org/0009-0002-2677-9246}{ORCID}) [copyright holder]
+}
 
 }
 \keyword{internal}

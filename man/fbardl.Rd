@@ -7,7 +7,7 @@
 fbardl(
   formula,
   data,
-  type = c("fardl", "fbardl_mcnown", "fbardl_bvz"),
+  type = c("fbardl_bvz", "fbardl_mcnown", "fardl"),
   maxlag = 4,
   maxk = 5,
   ic = c("aic", "bic"),
@@ -16,7 +16,11 @@ fbardl(
   fourier = TRUE,
   level = 0.95,
   horizon = 20,
-  unconditional = FALSE
+  unconditional = FALSE,
+  kgrid = c("integer", "fractional"),
+  kstar = NULL,
+  lags = NULL,
+  seed = NULL
 )
 }
 \arguments{
@@ -27,9 +31,12 @@ dependent and independent variables.}
 
 \item{type}{Character string specifying the test type:
 \itemize{
-  \item \code{"fardl"}: Fourier ARDL with PSS bounds test (default)
-  \item \code{"fbardl_mcnown"}: Bootstrap ARDL (McNown, Sam & Goh, 2018)
-  \item \code{"fbardl_bvz"}: Bootstrap ARDL (Bertelli, Vacca & Zoia, 2022)
+  \item \code{"fbardl_bvz"} (default): bootstrap with separate nulls
+    (Bertelli, Vacca and Zoia, 2022)
+  \item \code{"fbardl_mcnown"}: bootstrap with the null of the overall
+    F test for all statistics (McNown, Sam and Goh, 2018)
+  \item \code{"fardl"}: Kripfganz and Schneider (2020) bounds; valid only
+    without Fourier terms (see Details)
 }}
 
 \item{maxlag}{Integer. Maximum lag order for grid search (default: 4).}
@@ -46,13 +53,35 @@ dependent and independent variables.}
 
 \item{fourier}{Logical. Whether to include Fourier terms (default: TRUE).}
 
-\item{level}{Numeric. Confidence level for intervals (default: 0.95).}
+\item{level}{Numeric. Confidence level of the long-run coefficient
+intervals (default: 0.95). Test decisions are made at the 5\% level.}
 
-\item{horizon}{Integer. Horizon for dynamic multipliers (default: 20).}
+\item{horizon}{Not used; kept for compatibility with earlier versions
+(no dynamic multipliers are computed).}
 
 \item{unconditional}{Logical. If \code{TRUE}, the contemporaneous
-differences of the regressors are excluded (the unconditional form of
-Yilanci et al., 2020, and McNown et al., 2018). Default \code{FALSE}.}
+differences of the regressors are excluded from the estimated model, as
+in the simulation model of McNown, Sam and Goh (2018, eq. 12). Default
+\code{FALSE}.}
+
+\item{kgrid}{Grid of candidate Fourier frequencies when k* is selected:
+\code{"integer"} (default), \eqn{k = 1, \dots,} \code{maxk}, or
+\code{"fractional"}, \eqn{k = 0.1, 0.2, \dots,} \code{maxk} (the only
+grid of fbardl 1.1.0 and earlier). See Details.}
+
+\item{kstar}{Optional Fourier frequency fixed by the user in advance
+(requires \code{fourier = TRUE}). It is then not selected, neither on
+the data nor in the bootstrap.}
+
+\item{lags}{Optional list with elements \code{p} (number of lagged
+differences of y) and \code{q} (highest lag of the differences of each
+regressor, one value per regressor or a single value for all) fixing the
+lags in advance. They are then not selected, neither on the data nor in
+the bootstrap.}
+
+\item{seed}{Optional integer seed for the bootstrap; the random number
+generator state of the session is restored afterwards. With
+\code{NULL} (default) the session's generator is used.}
 }
 \value{
 An object of class \code{"fbardl"} containing:
@@ -64,13 +93,21 @@ An object of class \code{"fbardl"} containing:
   \item{long.run}{Long-run coefficient estimates with standard errors}
   \item{short.run}{Short-run coefficient estimates}
   \item{ecm.coef}{Error correction coefficient (speed of adjustment)}
-  \item{best.p}{Selected lag order for dependent variable}
-  \item{best.q}{Selected lag orders for independent variables}
-  \item{best.kstar}{Selected Fourier frequency}
+  \item{best.p}{Selected (or fixed) lag order for the dependent variable}
+  \item{best.q}{Selected (or fixed) lag orders for the independent variables}
+  \item{best.kstar}{Selected (or fixed) Fourier frequency}
+  \item{kgrid, kstar.fixed, lags.fixed, ssr.by.k}{Frequency grid used,
+    whether k* and the lags were fixed by the user, and the SSR of each
+    candidate frequency}
   \item{F.overall}{F-statistic for overall cointegration test}
   \item{t.dependent}{t-statistic on lagged dependent variable}
   \item{F.independent}{F-statistic on lagged independent variables}
-  \item{cointegration}{Cointegration test results with critical values}
+  \item{cointegration}{Cointegration test results: p-values, critical
+    values, \code{decision} (text) and \code{decision.code}; for the
+    bootstrap types also the bootstrap distributions (\code{Fov.boot},
+    \code{t.boot}, \code{Find.boot}), the numbers of valid and failed
+    replications, \code{reselect} (what was selected again in each
+    replication) and \code{dgpcheck}}
   \item{diagnostics}{Diagnostic test results}
   \item{model.fit}{Model fit statistics (R2, AIC, BIC, etc.)}
   \item{residuals}{Model residuals}
@@ -80,97 +117,143 @@ An object of class \code{"fbardl"} containing:
 }
 }
 \description{
-Performs the Fourier Bootstrap ARDL (FBARDL) bounds testing approach for
-cointegration analysis. This function combines the Pesaran, Shin & Smith
-(2001) ARDL bounds testing framework with Fourier terms to capture structural
-breaks, and provides bootstrap critical values for robust inference.
+ARDL bounds tests for cointegration (Pesaran, Shin and Smith, 2001) with
+optional Fourier terms for smooth breaks and bootstrap critical values
+(McNown, Sam and Goh, 2018; Bertelli, Vacca and Zoia, 2022).
 }
 \details{
-The FBARDL approach extends the standard ARDL bounds testing procedure by:
-\enumerate{
-  \item Incorporating Fourier terms to capture smooth structural breaks
-  \item Using bootstrap methods to generate finite-sample critical values
-  \item Implementing the McNown et al. (2018) procedure to detect degenerate cases
-}
+\strong{Model.} The equilibrium-correction model regresses
+\eqn{\Delta y_t} on \eqn{y_{t-1}}, \eqn{x_{t-1}}, \eqn{p} lagged
+differences of \eqn{y}, the differences of each regressor at lags 0 (1
+if \code{unconditional = TRUE}) to \eqn{q_j}, the Fourier terms
+\eqn{\sin(2\pi k^* t/T)} and \eqn{\cos(2\pi k^* t/T)}, a constant and, in
+PSS cases 4 and 5, a linear trend. The overall F test (Fov) restricts the
+lagged levels, together with the intercept in case 2 and the trend in case
+4; t is the t statistic on \eqn{y_{t-1}} and Find the F test on the
+lagged regressors.
 
-The PSS case sets the deterministic terms: a constant in all cases and a
-linear trend in cases 4 and 5. The overall F test restricts the lagged
-levels, together with the intercept in case 2 and the trend in case 4.
+\strong{Selection.} Step 1: unless \code{kstar} is given, \eqn{k^*}
+minimises the sum of squared residuals of the model with every lag at
+\code{maxlag}. With \code{kgrid = "integer"} the candidates are
+\eqn{1, \dots,} \code{maxk}, the integer frequencies chosen by minimum SSR
+in Enders and Lee (2012); with \code{kgrid = "fractional"} they are
+\eqn{0.1, 0.2, \dots,} \code{maxk}. The integer default, and whether the
+fractional grid is appropriate, are package choices pending verification
+against Yilanci, Bozoklu and Gorus (2020) and Omay (2015). Step 2: unless
+\code{lags} is given, \eqn{p} (1 to \code{maxlag}) and each \eqn{q_j} (0
+to \code{maxlag}) minimise the AIC or BIC with \eqn{k^*} fixed.
 
-With \code{type = "fardl"} the F and t statistics are compared with the
-finite-sample critical values and approximate p-values of Kripfganz and
-Schneider (2020), computed from their response surface coefficients
-(Stata package \code{ardl}) for the sample size, the number of
-regressors and the number of short-run coefficients (the Fourier terms
-included). These bounds do not account for the Fourier terms; the
-F test on the lagged regressors has no tabulated distribution and is
-reported with the bootstrap types only.
+\strong{Bounds (\code{type = "fardl"}).} Without Fourier terms
+(\code{fourier = FALSE}) Fov and t are compared with the finite-sample
+critical values and approximate p-values of Kripfganz and Schneider
+(2020), for the sample size, the number of regressors and the number of
+short-run coefficients, and the 5\% bounds decision is reported. With
+Fourier terms no valid bounds exist: no p-values and no decision are
+given, and the bounds printed are the bounds for the model without
+Fourier terms (short-run coefficients counted without the Fourier terms);
+they are not valid with Fourier terms. Use a bootstrap type for
+inference. Find has no tabulated distribution.
 
-The bootstrap types follow the Stata module \code{fbardl} 1.3.0. Data
-are generated recursively under the null from the restricted
-equilibrium-correction equation for \eqn{y} and the equations for
-\eqn{\Delta x}, resampling the residual pairs. \code{"fbardl_mcnown"}
-uses one null (all lagged levels, plus the restricted deterministic term)
-for the three statistics and an unrestricted \eqn{\Delta x} equation;
-\code{"fbardl_bvz"} uses a separate null for each statistic, a marginal
-\eqn{\Delta x} equation without the lagged level of \eqn{y}, and
-recentred residuals.
-
-The procedure involves three main steps:
-\enumerate{
-  \item Selection of optimal Fourier frequency k* by minimum SSR
-  \item Selection of lag orders (p, q) by AIC or BIC
-  \item Cointegration testing with bootstrap or PSS critical values
-}
-
-Three test statistics are computed:
-\itemize{
-  \item \code{F.overall}: Joint test on all lagged level variables
-  \item \code{t.dependent}: t-test on lagged dependent variable
-  \item \code{F.independent}: Joint test on lagged independent variables
-}
+\strong{Bootstrap (\code{"fbardl_bvz"}, \code{"fbardl_mcnown"}).} The
+bootstrap uses the recursive engine shared with the package ardlverse
+(file \code{R/ardl_boot_engine.R}, engine version 1.1.0). Once, on the
+data: the restricted equation for \eqn{\Delta y} (under the null of each
+statistic) and the equation for \eqn{\Delta x} are estimated with the
+selected (or fixed) \eqn{k^*}, \eqn{p} and \eqn{q}, and their residuals
+are saved. \code{"fbardl_bvz"} follows Bertelli, Vacca and Zoia (2022,
+Section 3): separate nulls for Fov, t and Find, the marginal VECM for
+\eqn{\Delta x} (\eqn{x_{t-1}} and \eqn{p} lags of \eqn{\Delta y} and
+\eqn{\Delta x}), and initial values drawn as a random block of the data.
+\code{"fbardl_mcnown"} uses the null of Fov for all statistics (McNown,
+Sam and Goh, 2018, Steps 1 to 8); MSG write the equation for \eqn{y}
+without the contemporaneous differences (their eq. 12), which is the form
+used with \code{unconditional = TRUE}; with the default conditional ECM,
+applying their joint null to it is a package choice. The
+\eqn{\Delta x} equation is unrestricted (it also contains \eqn{y_{t-1}}),
+and the initial values are the first observations of the data (with
+\code{"fbardl_bvz"} the levels in the random block start the recursion).
+In each replication: (1) the residual pairs are resampled with
+replacement and recentred (after each draw for \code{"fbardl_bvz"}; once,
+before resampling, for \code{"fbardl_mcnown"}); (2) \eqn{x^*} and
+\eqn{y^*} are generated recursively from the estimated equations, with
+the Fourier terms (at the data's \eqn{k^*}) and the trend held fixed; (3)
+\eqn{k^*} is selected again on the bootstrap sample by Step 1 (unless
+\code{kstar} is given or \code{fourier = FALSE}) and the lags by Step 2
+(unless \code{lags} is given); (4) the model is estimated with the
+selected specification and Fov, t and Find are computed exactly as on the
+data. Repeating the selection in each replication is a package choice
+(BVZ step 5(c) re-estimates the unrestricted model but does not discuss
+re-selection; McNown, Sam and Goh do not discuss it either); it makes the bootstrap distribution account for the data-based selection.
+In the package's Monte Carlo experiments (n = 100, independent random
+walks, \code{maxlag = 1}, 200 samples, 199 replications, 5\% level), the
+default call gave sizes 0.075 (Fov), 0.135 (t), 0.110 (Find) and 0.040
+for the combined decision; holding \eqn{k^*} and the lags fixed at their
+data-selected values (fbardl 1.1.0) gave 0.375, 0.420 and 0.270. With
+\code{unconditional = TRUE} the generating equation for \eqn{\Delta y}
+also omits the contemporaneous differences of the regressors, so the
+bootstrap model is the estimated model in both forms. P-values are the shares of bootstrap statistics at
+least as extreme as the observed one; critical values are order
+statistics (MSG eqs. 15-16, BVZ eqs. 24-25). The decision (5\% level)
+requires Fov, t and Find to reject. Fov rejecting and t not is the
+degenerate case of the first type (whatever Find gives); Fov and t
+rejecting and Find not is the degenerate case of the second type
+(terminology of Bertelli, Vacca and Zoia 2022, eqs. 8-9; McNown, Sam and
+Goh 2018 number the two degenerate cases the other way). The same labels
+are used for both bootstrap types. Failed replications are set to \code{NA} and counted.
+The run time grows with \code{reps}, \code{maxlag}, the number of
+regressors and the frequency grid, because the selection is repeated in
+every replication; fixing \code{kstar} and \code{lags} removes it.
 }
 \examples{
 \donttest{
-# Load example data
 data(fbardl_data)
 
-# Basic Fourier ARDL test
-result <- fbardl(y ~ x1 + x2, data = fbardl_data, type = "fardl")
-summary(result)
+# Bootstrap (Bertelli, Vacca and Zoia), k* and lags selected again in
+# each replication; few replications to keep the example short
+result <- fbardl(y ~ x1 + x2, data = fbardl_data, maxlag = 2, maxk = 3,
+                 reps = 49, seed = 1)
+result
 
-# Bootstrap ARDL (McNown approach)
-result_boot <- fbardl(y ~ x1 + x2, data = fbardl_data,
-                      type = "fbardl_mcnown", reps = 499)
-summary(result_boot)
+# McNown, Sam and Goh bootstrap with k* and lags fixed in advance
+result_msg <- fbardl(y ~ x1 + x2, data = fbardl_data,
+                     type = "fbardl_mcnown", kstar = 1,
+                     lags = list(p = 1, q = c(1, 1)), reps = 99, seed = 1)
+summary(result_msg)
 
-# Without Fourier terms
-result_nofourier <- fbardl(y ~ x1 + x2, data = fbardl_data,
-                           fourier = FALSE)
+# Bounds test without Fourier terms
+result_bounds <- fbardl(y ~ x1 + x2, data = fbardl_data, type = "fardl",
+                        fourier = FALSE)
 }
 
 }
 \references{
+Bertelli, S., Vacca, G. and Zoia, M. (2022). Bootstrap cointegration
+tests in ARDL models. \emph{Economic Modelling}, 116, 105987.
+\doi{10.1016/j.econmod.2022.105987}
+
+Enders, W. and Lee, J. (2012). A unit root test using a Fourier series to
+approximate smooth breaks. \emph{Oxford Bulletin of Economics and
+Statistics}, 74(4), 574-599. \doi{10.1111/j.1468-0084.2011.00662.x}
+
 Kripfganz, S. and Schneider, D. C. (2020). Response surface regressions
 for critical value bounds and approximate p-values in equilibrium
 correction models. \emph{Oxford Bulletin of Economics and Statistics},
 82(6), 1456-1481. \doi{10.1111/obes.12377}
 
-Pesaran, M. H., Shin, Y., & Smith, R. J. (2001). Bounds testing approaches
-to the analysis of level relationships. \emph{Journal of Applied Econometrics},
-16(3), 289-326. \doi{10.1002/jae.616}
+McNown, R., Sam, C. Y. and Goh, S. K. (2018). Bootstrapping the
+autoregressive distributed lag test for cointegration. \emph{Applied
+Economics}, 50(13), 1509-1521. \doi{10.1080/00036846.2017.1366643}
 
-McNown, R., Sam, C. Y., & Goh, S. K. (2018). Bootstrapping the autoregressive
-distributed lag test for cointegration. \emph{Applied Economics}, 50(13),
-1509-1521. \doi{10.1080/00036846.2017.1366643}
+Omay, T. (2015). Fractional frequency flexible Fourier form to
+approximate smooth breaks in unit root testing. \emph{Economics Letters},
+134, 123-126. \doi{10.1016/j.econlet.2015.07.010}
 
-Yilanci, V., Bozoklu, S., & Gorus, M. S. (2020). Are BRICS countries
+Pesaran, M. H., Shin, Y. and Smith, R. J. (2001). Bounds testing
+approaches to the analysis of level relationships. \emph{Journal of
+Applied Econometrics}, 16(3), 289-326. \doi{10.1002/jae.616}
+
+Yilanci, V., Bozoklu, S. and Gorus, M. S. (2020). Are BRICS countries
 pollution havens? Evidence from a bootstrap ARDL bounds testing approach
 with a Fourier function. \emph{Sustainable Cities and Society}, 55, 102035.
 \doi{10.1016/j.scs.2020.102035}
-
-Kripfganz, S., & Schneider, D. C. (
-2020). Response surface regressions for critical value bounds and approximate
-p-values in equilibrium correction models. \emph{Oxford Bulletin of Economics
-and Statistics}, 82(6), 1456-1481. \doi{10.1111/obes.12377}
 }
